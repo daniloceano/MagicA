@@ -1,4 +1,9 @@
-# MagicA - Magic Adjustment
+<div align="center">
+  <img src="docs/assets/images/magica_logo.png" alt="MagicA Logo" width="300">
+  
+  # MagicA
+  *Magic Adjustment - Advanced Statistical Data Fitting*
+</div>
 
 **MagicA** (Magic Adjustment) is a Python package for statistical data adjustment, with special focus on wind data, including advanced fitting techniques, goodness-of-fit tests, and visualization.
 
