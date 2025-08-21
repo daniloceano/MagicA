@@ -29,6 +29,15 @@ cd MagicA
 pip install -e .
 ```
 
+## Documentation
+
+📖 **Documentation**: [magica.readthedocs.io](https://magica.readthedocs.io) *(under construction)*
+
+The documentation is currently being built and will include:
+- Comprehensive API reference
+- Tutorials and examples
+- Best practices for wind data analysis
+
 ## Basic Usage (In Development)
 
 ```python

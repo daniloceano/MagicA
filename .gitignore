@@ -27,6 +27,13 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Documentation builds
+docs/build/
+docs/source/_build/
+
+# Documentation artifacts
+badges/
+
 # PyInstaller
 *.manifest
 *.spec

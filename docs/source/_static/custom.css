@@ -1,0 +1,34 @@
+/* Custom CSS for MagicA documentation */
+
+.wy-nav-content {
+    max-width: 1200px;
+}
+
+.rst-content .note .admonition-title {
+    background: #6ab7ff;
+}
+
+.rst-content .warning .admonition-title {
+    background: #f0ad4e;
+}
+
+.rst-content .tip .admonition-title {
+    background: #1abc9c;
+}
+
+/* Logo styling */
+.wy-side-nav-search > a img.logo {
+    width: auto;
+    height: auto;
+    max-width: 200px;
+    max-height: 100px;
+}
+
+/* Code block improvements */
+.rst-content .highlight {
+    background: #f8f8f8;
+}
+
+.rst-content .highlight pre {
+    background: #f8f8f8;
+}
