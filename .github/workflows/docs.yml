@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ main ]
 
+# Set permissions for GITHUB_TOKEN
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build-docs:
     runs-on: ubuntu-latest
@@ -44,8 +50,6 @@ jobs:
     - name: Check for build warnings
       run: |
         cd docs
-        # Make build fail if there are warnings (optional - remove if too strict)
-        # make html SPHINXOPTS="-W"
         echo "Documentation built successfully"
         
     - name: Upload documentation artifacts
@@ -55,19 +59,38 @@ jobs:
         path: docs/build/html/
         retention-days: 30
         
-    - name: Deploy to GitHub Pages
+    - name: Setup Pages
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@v4
+      uses: actions/configure-pages@v4
+      
+    - name: Upload to GitHub Pages
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/upload-pages-artifact@v3
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./docs/build/html
-        force_orphan: true
-        user_name: 'github-actions[bot]'
-        user_email: 'github-actions[bot]@users.noreply.github.com'
-        commit_message: 'Deploy documentation ${{ github.sha }}'
-        
+        path: ./docs/build/html
+
+  # Deploy job
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build-docs
+    
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+  # Comment on PRs
+  comment-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: build-docs
+    
+    steps:
     - name: Comment PR with documentation preview
-      if: github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |
