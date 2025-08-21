@@ -16,72 +16,18 @@
 - 🌪️ Specialized in wind data analysis
 - 🔧 Advanced statistical fitting techniques
 
-## Installation
-
-For local development:
-
-```bash
-# Clone the repository
-git clone https://github.com/daniloceano/MagicA.git
-cd MagicA
-
-# Install in development mode
-pip install -e .
-```
-
 ## Documentation
 
-📖 **Documentation**: [magica.readthedocs.io](https://magica.readthedocs.io) *(under construction)*
+📖 **Documentation**: [magica.readthedocs.io](https://magica.readthedocs.io/en/latest/) *(under construction)*
 
 The documentation is currently being built and will include:
 - Comprehensive API reference
 - Tutorials and examples
 - Best practices for wind data analysis
 
-## Basic Usage (In Development)
-
-```python
-import magica as ma
-
-# Load data
-processor = ma.DataProcessor()
-processor.load_data('wind_data.csv')
-
-# Get basic statistics
-stats = processor.get_basic_stats()
-print(stats)
-
-# Get data as numpy array
-data_array = processor.get_data_array()
-```
-
-## Current Project Structure
-
-```
-magica/
-├── __init__.py
-├── core/
-│   ├── __init__.py
-│   └── data_processor.py  # Basic data loading and processing
-└── utils/                 # Utilities (in development)
-    └── __init__.py
-```
-
 ## Development
 
 This project is in early development. The approach is incremental, adding features as needed.
-
-```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests (when implemented)
-pytest
-
-# Run linting
-flake8 magica/
-black magica/
-```
 
 ## License
 
