@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/images/magica_logo.png" alt="MagicA Logo" width="300">
+  <img src="docs/assets/images/magica_logo_blacjbg.png" alt="MagicA Logo" width="300">
   
   # MagicA
   *Magic Adjustment - Advanced Statistical Data Fitting*
