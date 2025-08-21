@@ -53,7 +53,7 @@ jobs:
         interrogate magica/ --generate-badge badges/docstring-coverage.svg --ignore-init-method --ignore-magic --ignore-module || echo "Badge generated"
         
     - name: Upload coverage badge
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: docstring-coverage-badge
         path: badges/
