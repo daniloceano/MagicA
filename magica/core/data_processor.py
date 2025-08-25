@@ -206,3 +206,31 @@ class DataProcessor:
         if self.data is None:
             return 0
         return len(self.data)
+    
+    def __getattr__(self, name):
+        """
+        Delegate method calls to the internal MagicAdjuster.
+        
+        This allows direct access to all scipy.stats methods like:
+        cdf, pdf, ppf, sf, isf, rvs, stats, etc.
+        
+        Parameters
+        ----------
+        name : str
+            Name of the method/attribute to access
+            
+        Returns
+        -------
+        Any
+            Method or attribute from the fitted distribution
+        """
+        # First check if we have an adjuster with a fitted distribution
+        if self._adjuster is None:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'. "
+                               "Did you forget to call fit_distribution() first?")
+        
+        # Delegate to the adjuster's __getattr__
+        try:
+            return getattr(self._adjuster, name)
+        except AttributeError:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
