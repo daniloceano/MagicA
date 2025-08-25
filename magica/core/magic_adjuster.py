@@ -205,20 +205,18 @@ class MagicAdjuster:
         if self.fitted_distribution is None or self.fitted_params is None:
             raise ValueError("No distribution has been fitted yet. Call fit_distribution() first.")
         
-        # Get the frozen distribution
-        frozen_dist = self.fitted_distribution(*self.fitted_params)
-        
-        # Check if the method exists in the distribution
-        if not hasattr(frozen_dist, name):
+        # Check if the method exists in the distribution class (not frozen)
+        if not hasattr(self.fitted_distribution, name):
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
         
         # Methods that commonly use the original data as default input
         data_aware_methods = {
             'pdf', 'cdf', 'sf', 'logpdf', 'logcdf', 'logsf', 
-            'ppf', 'isf', 'logpdf', 'interval'
+            'ppf', 'isf', 'interval'
         }
         
-        original_method = getattr(frozen_dist, name)
+        # Get the original method from the distribution class
+        original_method = getattr(self.fitted_distribution, name)
         
         if name in data_aware_methods:
             def smart_wrapper(*args, **kwargs):
@@ -226,13 +224,17 @@ class MagicAdjuster:
                 Smart wrapper that uses original data as default for common methods.
                 
                 If the first argument is not provided for evaluation methods,
-                use the original data points.
+                use the original data points. If parameters are not provided,
+                use the fitted parameters.
                 """
-                # If no positional arguments provided, use original data
+                # If no positional arguments provided, use original data with fitted params
                 if len(args) == 0 and name in ['pdf', 'cdf', 'sf', 'logpdf', 'logcdf', 'logsf']:
-                    return original_method(self.data, **kwargs)
+                    return original_method(self.data, *self.fitted_params, **kwargs)
+                # If only data provided (1 arg), add fitted parameters
+                elif len(args) == 1 and name in ['pdf', 'cdf', 'sf', 'logpdf', 'logcdf', 'logsf']:
+                    return original_method(args[0], *self.fitted_params, **kwargs)
                 else:
-                    # Normal call with provided arguments
+                    # Normal call with all provided arguments
                     return original_method(*args, **kwargs)
             
             # Copy metadata from original method
@@ -241,8 +243,9 @@ class MagicAdjuster:
             
             return smart_wrapper
         else:
-            # For other methods, delegate normally
-            return original_method
+            # For other methods, use frozen distribution for convenience
+            frozen_dist = self.fitted_distribution(*self.fitted_params)
+            return getattr(frozen_dist, name)
         
     def get_fitted_params(self) -> Tuple:
         """
@@ -286,9 +289,14 @@ class MagicAdjuster:
     def get_bin_number_sturges(self):
         """
         Calculate the optimal number of bins using Sturges' rule.
-
+        
         Sturges' rule is a simple heuristic for determining the number of bins in a histogram.
         It assumes that the data follows a normal distribution and is best suited for smaller datasets.
+        
+        Returns
+        -------
+        int
+            Number of bins calculated using Sturges' rule
         """
         N = len(self.data)
         return int(1 + np.log2(N))
@@ -296,9 +304,14 @@ class MagicAdjuster:
     def get_bin_number_rice(self):
         """
         Calculate the optimal number of bins using Rice's rule.
-
+        
         Rice's rule suggests a bin count that scales with the cube root of the dataset size.
         It is a simple alternative to Sturges' rule and works well for larger datasets.
+        
+        Returns
+        -------
+        int
+            Number of bins calculated using Rice's rule
         """
         N = len(self.data)
         return int(2 * N**(1/3))
@@ -306,8 +319,14 @@ class MagicAdjuster:
     def get_bin_number_freedman_diaconis(self):
         """
         Calculate the number of bins based on the Freedman-Diaconis rule.
+        
         This rule uses the interquartile range (IQR) to calculate bin width and is robust
         for skewed distributions.
+        
+        Returns
+        -------
+        int
+            Number of bins calculated using Freedman-Diaconis rule
         """
         iqr = np.percentile(self.data, 75) - np.percentile(self.data, 25)
         bin_width = 2 * iqr / len(self.data)**(1/3)
@@ -316,8 +335,14 @@ class MagicAdjuster:
     def get_bin_number_scott(self):
         """
         Calculate the bin width based on Scott's rule.
+        
         Scott's rule minimizes the integrated mean squared error for normal distributions,
         but can also work for large datasets.
+        
+        Returns
+        -------
+        int
+            Number of bins calculated using Scott's rule
         """
         bin_width = 3.5 * np.std(self.data) / len(self.data)**(1/3)
         return max(1, int((max(self.data) - min(self.data)) / bin_width))
@@ -329,6 +354,11 @@ class MagicAdjuster:
         Doane's formula is an extension of Sturges' rule that accounts for the skewness 
         of the data distribution. This method is particularly useful when dealing with 
         non-normal data distributions, as it adjusts the bin count based on the sample skewness.
+        
+        Returns
+        -------
+        int
+            Number of bins calculated using Doane's rule
         """
         N = len(self.data)
         g1 = stats.skew(self.data)
@@ -339,30 +369,28 @@ class MagicAdjuster:
         """
         Determines the number of bins for histogram plotting based on a chosen method.
 
-        Args:
-            bins (int or str, optional): 
-                The binning method to use. Default is `"doane"`.
+        Parameters
+        ----------
+        bins : int or str, optional 
+            The binning method to use. Default is 'doane'.
                 Options:
-                    - Integer (e.g., `30`): A fixed number of bins.
+                - Integer (e.g., 30): A fixed number of bins.
                     - 'sturges': Sturges' rule (log-based, best for normal distributions).
                     - 'freedman-diaconis': Uses Freedman-Diaconis rule (best for skewed distributions).
                     - 'rice': Uses Rice’s rule (scales with cube root of dataset size).
                     - 'scott': Uses Scott’s rule (minimizes IMSE for normal distributions).
-                    - 'doane': Uses Doane's rule (default, extension of Sturges' rule that accounts for the skewness of the data distribution).
+                - 'doane': Uses Doane's rule (extension of Sturges' rule that accounts for the skewness of the data distribution).
 
-        Returns:
-            int: The computed number of bins.
+        Returns
+        -------
+        int
+            The computed number of bins.
 
-        Raises:
-            ValueError: If an unsupported binning method is provided.
-
-        Example:
-            >>> lm_adjust = PointAdjustment(data, bins='freedman-diaconis')
-            >>> num_bins = lm_adjust.get_num_bins('freedman-diaconis')
-            >>> print(num_bins)
-            25
+        Raises
+        ------
+        ValueError
+            If an unsupported binning method is provided.
         """
-        N = len(self.data)
         if bins == 'sturges':
             num_bins = self.get_bin_number_sturges()
         elif bins == 'rice':
@@ -378,31 +406,46 @@ class MagicAdjuster:
 
         return num_bins
 
-    def goodness_of_fit(self, method: str, bins: Union['str', 'int'] = 'doane'):
-        if method in ['chisquared', 'chi2']:
-            # Determine number of bins
+    def goodness_of_fit(self, method: str, bins: Union[str, int] = 'doane'):
+        if method.lower() in ['chisquared', 'chi2']:
             n_bins = self.get_num_bins(bins)
-
-            dist_info = self.get_distribution_info()
-            
             params = self.fitted_params
 
-            # Empirical frequencies
+            # Empirical frequencies  
             observed_freq, bin_edges = np.histogram(self.data, bins=n_bins)
-
-            # Compute theoretical frequencies
-            expected_freq_weibull = len(self.data) * np.diff(self.fitted_distribution.cdf(bin_edges, *params))
             
-            # Normalize the expected frequencies to match the total number of data points
-            expected_freq_weibull *= observed_freq.sum() / expected_freq_weibull.sum()  # Normalizando para corresponder à soma das observadas
+            # Compute theoretical probabilities for each bin
+            bin_probs = np.diff(self.fitted_distribution.cdf(bin_edges, *params))
+            
+            # Expected frequencies = probabilities × total sample size
+            expected_freq = bin_probs * len(self.data)
 
-            return stats.chisquare(observed_freq, f_exp=expected_freq_weibull)
-        
+            # Check if normalization is needed
+            discrepancy = abs(expected_freq.sum() - observed_freq.sum())
+            if discrepancy > 1e-6:
+                warnings.warn(f"Normalizing expected frequencies. Original sum: {expected_freq.sum():.6f}, "
+                            f"Target sum: {observed_freq.sum()}")
+
+            # Normalize only if necessary
+            if discrepancy > 1e-10:
+                expected_freq *= observed_freq.sum() / expected_freq.sum()
+            
+            # Chi-square test
+            chi_stats = stats.chisquare(observed_freq, f_exp=expected_freq)
+
+            return {
+                'chi2_statistic': chi_stats.statistic,
+                'p_value': chi_stats.pvalue,
+                'n_bins': n_bins,
+                'observed_freq': observed_freq,
+                'expected_freq': expected_freq
+            }
+
 ## TO-DO:
 # When set a new distribution to an already used variable, it will override the distribution form previous variable
 # For example:
 # fitted_data_weibull = data.fit_distribution('weibull')
-# fitted_data_weibull = data.fit_distribution('weibull')
+# fitted_data_norm = data.fit_distribution('norm')
 #
 # The distribution from "fitted_data_weibull" will return the norm dist.
 
