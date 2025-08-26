@@ -4,6 +4,7 @@ Statistical distribution fitting and adjustment for wind data
 
 import numpy as np
 from scipy import stats
+from sklearn.metrics import root_mean_squared_error
 from typing import Union, Dict, Any, Optional, Tuple
 import warnings
 
@@ -439,6 +440,24 @@ class MagicAdjuster:
                 'n_bins': n_bins,
                 'observed_freq': observed_freq,
                 'expected_freq': expected_freq
+            }
+        
+        elif method.lower() in ['kolmogorov-smirnov', 'ks']:
+            # KS test
+            ks_stats = stats.kstest(self.data, self.fitted_distribution.cdf, args=self.fitted_params)
+            return {
+                'ks_statistic': ks_stats.statistic,
+                'p_value': ks_stats.pvalue
+            }
+
+        elif method.lower() in ['root-mean-square', 'rms']:
+            # RMS test
+            observed_freq, bin_edges = np.histogram(self.data, bins=n_bins, density=True)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            estimated_pdf = self.fitted_distribution.pdf(bin_centers, *self.fitted_params)
+            rms_pdf = root_mean_squared_error(observed_freq, estimated_pdf)
+            return {
+                'rms_pdf': rms_pdf
             }
 
 ## TO-DO:
