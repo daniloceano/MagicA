@@ -21,6 +21,9 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx.ext.mathjax',
     'sphinx.ext.githubpages',
+    'myst_parser',
+    'nbsphinx',
+    'sphinx_rtd_theme',
 ]
 
 templates_path = ['_templates']
@@ -88,3 +91,19 @@ autodoc_default_options = {
 html_css_files = [
     'custom.css',
 ]
+
+# MyST Parser settings
+myst_enable_extensions = [
+    "deflist",
+    "tasklist",
+    "colon_fence",
+]
+
+# nbsphinx settings
+nbsphinx_execute = 'never'  # Don't execute notebooks during build
+
+# Source file suffixes
+source_suffix = {
+    '.rst': None,
+    '.md': 'myst_parser',
+}
