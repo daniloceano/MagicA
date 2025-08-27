@@ -450,15 +450,14 @@ class MagicAdjuster:
                 'p_value': ks_stats.pvalue
             }
 
-        elif method.lower() in ['root-mean-square', 'rms']:
-            # RMS test
+        elif method.lower() in ['root-mean-square-error', 'rmse']:
+            # RMSE
+            n_bins = self.get_num_bins(bins)
             observed_freq, bin_edges = np.histogram(self.data, bins=n_bins, density=True)
             bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
             estimated_pdf = self.fitted_distribution.pdf(bin_centers, *self.fitted_params)
-            rms_pdf = root_mean_squared_error(observed_freq, estimated_pdf)
-            return {
-                'rms_pdf': rms_pdf
-            }
+            rmse = np.sqrt(np.mean((observed_freq - estimated_pdf) ** 2))
+            return rmse
 
 ## TO-DO:
 # When set a new distribution to an already used variable, it will override the distribution form previous variable
