@@ -2,10 +2,11 @@
 Statistical distribution fitting and adjustment for wind data
 """
 
+from matplotlib.pylab import seed
 import numpy as np
 from scipy import stats
 from sklearn.metrics import root_mean_squared_error
-from typing import Union, Dict, Any, Optional, Tuple
+from typing import Union, Dict, Any, Optional, Tuple, List
 import warnings
 
 from .data_processor import DataProcessor
@@ -458,6 +459,393 @@ class MagicAdjuster:
             estimated_pdf = self.fitted_distribution.pdf(bin_centers, *self.fitted_params)
             rmse = np.sqrt(np.mean((observed_freq - estimated_pdf) ** 2))
             return rmse
+
+
+    def _generate_subsample_indices(
+        self,
+        size: int,
+        n_repeats: int,
+        sampling: str = 'random',
+        seed: Optional[int] = None,
+    ) -> List[np.ndarray]:
+        """
+        Generate index arrays for subsamples according to a chosen strategy.
+
+        Parameters
+        ----------
+        size : int
+            Number of elements in each subsample.
+        n_repeats : int
+            Number of subsamples (repeats) to generate per size.
+        sampling : {'random','bootstrap','disjoint'}, optional
+            Sampling strategy. Defaults to 'random'.
+        seed : int, optional
+            Seed for reproducible RNG. If None, RNG will be random.
+
+        Returns
+        -------
+        List[numpy.ndarray]
+            A list with `n_subsamples` index arrays (dtype int) pointing into ``self.data``.
+
+        Notes
+        -----
+        - This function returns index arrays (views) and does not copy the data itself.
+        - 'random' = sampling without replacement (size must be <= len(data)).
+        - 'bootstrap' = sampling with replacement (allows size > len(data)).
+        - 'disjoint' = non-overlapping partitions; will raise if size > len(data).
+        """
+        # local import to keep top-level imports minimal
+        rng = np.random.default_rng(seed)
+
+        N = len(self.data)
+        if sampling not in {'random', 'bootstrap', 'disjoint'}:
+            raise ValueError(f"Unknown sampling strategy: {sampling}")
+
+        if sampling == 'random' and size > N:
+            raise ValueError("For 'random' sampling size must be <= len(data). Use 'bootstrap' to allow size > N.")
+
+        indices: List[np.ndarray] = []
+
+        if sampling == 'bootstrap':
+            # with replacement
+            for _ in range(n_repeats):
+                idx = rng.integers(0, N, size=size)
+                indices.append(idx)
+
+        elif sampling == 'random':
+            # without replacement
+            for _ in range(n_repeats):
+                idx = rng.choice(N, size=size, replace=False)
+                indices.append(idx)
+
+        else:  # disjoint
+            if size <= 0:
+                raise ValueError("size must be > 0 for disjoint sampling")
+            per_pass = N // size
+            if per_pass == 0:
+                raise ValueError("disjoint sampling not possible: size > len(data)")
+
+            subsamples_needed = n_repeats
+            while subsamples_needed > 0:
+                perm = rng.permutation(N)
+                for i in range(per_pass):
+                    if subsamples_needed == 0:
+                        break
+                    start = i * size
+                    idx = perm[start:start + size]
+                    indices.append(idx)
+                    subsamples_needed -= 1
+
+        return indices
+
+    def monte_carlo_fit(
+            self,
+            sample_sizes: Optional[List[int]] = None,
+            n_subsamples: int = 20,
+            n_repeats: Optional[int] = None,
+            min_size: int = 100,
+            sampling: str = 'disjoint',  # 'random'|'disjoint'|'bootstrap'
+            seed: Optional[int] = None,
+            distribution: Optional[Union[str, object]] = None,
+            tests: Optional[List[str]] = None,  # e.g. ['chi2','ks','rmse'] or None -> ['chi2']
+            bins: Union[str, int] = 'doane',
+            n_jobs: int = 1,
+            store_raw: bool = False,
+            fit_kwargs: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+        """
+        Monte Carlo orchestration (index generation stage).
+
+        Behavior:
+        - If `sample_sizes` is provided (list of ints), those sizes are used.
+        - If `sample_sizes` is None, a grid of `n_subsamples` sizes is generated
+          between `min_size` and the full sample size.
+
+        Parameters
+        ----------
+        sample_sizes : list[int], optional
+            Explicit list of subsample sizes to evaluate (e.g. [100, 145, 190]).
+            If None, sizes will be generated using `n_subsamples` and `min_size`.
+        n_subsamples : int
+            When `sample_sizes` is None, number of distinct sizes to generate.
+        n_repeats : int, optional
+            Number of subsamples (repeats) to generate per size. If None a sensible
+            default is chosen based on the smallest size.
+        min_size : int
+            Minimum subsample size used when building the grid.
+        sampling : {'random','bootstrap','disjoint'}
+            Sampling strategy passed to `_generate_subsample_indices`.
+        seed : int, optional
+            RNG seed for reproducibility.
+
+        Returns
+        -------
+        dict
+            Results dict with generated sizes and index arrays per size:
+            {
+                'sizes': np.ndarray,
+                'indices': { size_int: ndarray(shape=(n_repeats, size)), ... },
+                'meta': {...}
+            }
+        """
+        N = len(self.data)
+        if N == 0:
+            raise ValueError("No data available for monte_carlo_fit.")
+
+        # Determine sizes
+        if sample_sizes is None:
+            min_size = max(1, int(min_size))
+            sizes = np.unique(np.linspace(min_size, N, int(n_subsamples), dtype=int))
+            sizes = sizes[sizes > 0]
+            if sizes.size == 0:
+                raise ValueError("Generated empty sizes grid; check min_size and n_subsamples values.")
+        else:
+            sizes = np.unique(np.asarray(sample_sizes, dtype=int))
+            if sizes.size == 0:
+                raise ValueError("`sample_sizes` provided is empty or invalid")
+
+        # Determine repeats per size
+        if n_repeats is None:
+            smallest = int(sizes[0])
+            n_repeats = max(10, min(100, N // smallest))
+
+        results: Dict[str, Any] = {
+            'sizes': sizes,
+            'indices': {},
+            'results': {},  # per-size -> list of per-repeat dicts with params and gof
+            'meta': {
+                'n_sizes': int(sizes.size),
+                'n_repeats': int(n_repeats),
+                'n_subsamples_param': int(n_subsamples),
+                'sampling': sampling,
+                'seed': seed,
+                'min_size': int(min_size)
+            }
+        }
+
+        if seed is None:
+            child_seq = [None] * sizes.size
+        else:
+            ss = np.random.SeedSequence(seed)
+            child_seq = ss.spawn(sizes.size)  # list of SeedSequence objects
+
+        for i, size in enumerate(sizes):
+            child_seed = child_seq[i]  # either SeedSequence or None
+
+            idx_list = self._generate_subsample_indices(
+                size=int(size),
+                n_repeats=int(n_repeats),
+                sampling=sampling,
+                seed=child_seed
+            )
+
+            try:
+                idx_arr = np.asarray(idx_list, dtype=int)
+            except Exception:
+                idx_arr = idx_list
+
+            results['indices'][int(size)] = idx_arr
+
+            # Now run fits + goodness-of-fit for each repeat
+            per_size_results = []
+            # determine which tests to run
+            test_list = [t.lower() for t in tests] if tests is not None else ['chi2']
+
+            for rep_i in range(len(idx_list)):
+                rep_result: Dict[str, Any] = {'params': None, 'gof': {}, 'error': None}
+                try:
+                    sub_idx = idx_list[rep_i]
+                    subdata = self.data[sub_idx]
+
+                    # create temporary DataProcessor and fit
+                    dp = DataProcessor(subdata)
+                    adj = dp._get_adjuster()
+
+                    # choose distribution: explicit param > existing fitted in self
+                    dist_to_fit = distribution if distribution is not None else self.fitted_distribution
+                    if dist_to_fit is None:
+                        raise ValueError("No distribution provided and no fitted distribution available on self.")
+
+                    # fit
+                    adj.fit_distribution(dist_to_fit, **(fit_kwargs or {}))
+                    params = adj.get_fitted_params()
+                    rep_result['params'] = params
+
+                    # run requested goodness-of-fit tests
+                    if 'chi2' in test_list:
+                        try:
+                            chi_res = adj.goodness_of_fit('chi2', bins=bins)
+                            rep_result['gof']['chi2'] = chi_res
+                        except Exception as e:
+                            rep_result['gof']['chi2'] = {'error': str(e)}
+
+                    if 'ks' in test_list:
+                        try:
+                            ks_res = adj.goodness_of_fit('ks')
+                            rep_result['gof']['ks'] = ks_res
+                        except Exception as e:
+                            rep_result['gof']['ks'] = {'error': str(e)}
+
+                    if 'rmse' in test_list:
+                        try:
+                            rmse_res = adj.goodness_of_fit('rmse', bins=bins)
+                            rep_result['gof']['rmse'] = rmse_res
+                        except Exception as e:
+                            rep_result['gof']['rmse'] = {'error': str(e)}
+
+                except Exception as e:
+                    rep_result['error'] = str(e)
+
+                per_size_results.append(rep_result)
+
+            results['results'][int(size)] = per_size_results
+
+        # --- Aggregation and CPS (stability) detection ---
+        # Which tests to summarize
+        test_list = [t.lower() for t in tests] if tests is not None else ['chi2']
+
+        summary: Dict[str, Any] = {'sizes': sizes.tolist(), 'tests': {}, 'params': {}}
+
+        # Collect parameter values per size
+        # determine max number of params returned by fits
+        max_params = 0
+        for size in sizes:
+            per = results['results'].get(int(size), [])
+            for rep in per:
+                if rep.get('params') is None:
+                    continue
+                max_params = max(max_params, len(rep['params']))
+
+        # For each test, compute list of p-values (or metric) per size
+        for test in test_list:
+            values_per_size = []
+            for size in sizes:
+                reps = results['results'].get(int(size), [])
+                vals = []
+                for rep in reps:
+                    gof = rep.get('gof', {})
+                    entry = gof.get(test)
+                    if entry is None:
+                        continue
+                    # chi2 and ks return dict with 'p_value', rmse returns scalar
+                    if isinstance(entry, dict):
+                        p = entry.get('p_value') if 'p_value' in entry else None
+                        if p is not None:
+                            vals.append(float(p))
+                        else:
+                            # try statistic value fallback
+                            stat = entry.get('chi2_statistic') or entry.get('ks_statistic')
+                            if stat is not None:
+                                vals.append(float(stat))
+                    else:
+                        try:
+                            vals.append(float(entry))
+                        except Exception:
+                            continue
+                values_per_size.append(vals)
+
+            # median per size
+            medians = np.array([np.median(v) if len(v) > 0 else np.nan for v in values_per_size])
+
+            # detect inflection / stability: look for first index where moving window is stable
+            tol = 0.01
+            window = 3
+            inflection_idx = None
+            if medians.size >= window:
+                for j in range(0, len(medians) - window + 1):
+                    window_vals = medians[j:j+window]
+                    if np.all(np.isfinite(window_vals)) and (np.nanmax(window_vals) - np.nanmin(window_vals) <= tol):
+                        inflection_idx = j + (window - 1)  # choose end of stable window
+                        break
+
+            inflection_size = int(sizes[inflection_idx]) if inflection_idx is not None else None
+
+            summary['tests'][test] = {
+                'values_per_size': values_per_size,
+                'medians': medians.tolist(),
+                'inflection_index': int(inflection_idx) if inflection_idx is not None else None,
+                'inflection_size': inflection_size,
+            }
+
+        # Aggregate parameters: collect per-parameter lists per size and compute medians
+        param_medians = {p: [] for p in range(max_params)}
+        param_values_per_size = {p: [] for p in range(max_params)}
+        for size in sizes:
+            reps = results['results'].get(int(size), [])
+            # for each param index, collect values across repeats
+            cols = {p: [] for p in range(max_params)}
+            for rep in reps:
+                params = rep.get('params')
+                if params is None:
+                    continue
+                for p in range(max_params):
+                    if p < len(params):
+                        try:
+                            cols[p].append(float(params[p]))
+                        except Exception:
+                            pass
+            for p in range(max_params):
+                param_values_per_size[p].append(cols[p])
+                param_medians[p].append(np.median(cols[p]) if len(cols[p]) > 0 else np.nan)
+
+        summary['params']['values_per_size'] = param_values_per_size
+        summary['params']['medians'] = {p: np.array(v).tolist() for p, v in param_medians.items()}
+
+        # Detect inflection for parameters (use first parameter as representative)
+        if max_params > 0:
+            p0_meds = np.array(param_medians[0])
+            tol_p = 1e-3 * (np.nanmax(p0_meds) - np.nanmin(p0_meds) if np.nanmax(p0_meds) != np.nanmin(p0_meds) else 1.0)
+            inflection_idx_p = None
+            if p0_meds.size >= window:
+                for j in range(0, len(p0_meds) - window + 1):
+                    window_vals = p0_meds[j:j+window]
+                    if np.all(np.isfinite(window_vals)) and (np.nanmax(window_vals) - np.nanmin(window_vals) <= tol_p):
+                        inflection_idx_p = j + (window - 1)
+                        break
+            summary['params']['inflection_index'] = int(inflection_idx_p) if inflection_idx_p is not None else None
+            summary['params']['inflection_size'] = int(sizes[inflection_idx_p]) if inflection_idx_p is not None else None
+        else:
+            summary['params']['inflection_index'] = None
+            summary['params']['inflection_size'] = None
+
+        results['summary'] = summary
+
+        # --- Create figure: boxplots for tests and first up to 3 parameters ---
+        try:
+            import matplotlib.pyplot as plt
+
+            n_param_plots = min(3, max_params)
+            n_test_plots = len(test_list)
+            total_rows = 1 + n_param_plots
+            fig, axes = plt.subplots(total_rows, 1, figsize=(8, 3 * total_rows), constrained_layout=True)
+            if total_rows == 1:
+                axes = [axes]
+
+            # p-values / metric boxplots
+            p_axes = axes[0]
+            bp_data = [summary['tests'][t]['values_per_size'] for t in [test_list[0]]][0]
+            # boxplot expects list of sequences per x position
+            p_axes.boxplot(bp_data, labels=[str(s) for s in sizes], showfliers=False)
+            p_axes.set_title(f"CPS boxplot for {test_list[0]}")
+            p_axes.set_xlabel('sample size')
+            p_axes.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
+
+            # parameter boxplots for first up to 3 params
+            for pi in range(n_param_plots):
+                ax = axes[1 + pi]
+                pdata = param_values_per_size.get(pi, [])
+                ax.boxplot(pdata, labels=[str(s) for s in sizes], showfliers=False)
+                ax.set_title(f'Parameter {pi} distribution across sample sizes')
+                ax.set_xlabel('sample size')
+                ax.set_ylabel(f'param_{pi}')
+
+            results['figure'] = fig
+        except Exception:
+            # figure generation is optional; ignore errors and continue
+            results['figure'] = None
+
+        return results
+
 
 ## TO-DO:
 # When set a new distribution to an already used variable, it will override the distribution form previous variable
