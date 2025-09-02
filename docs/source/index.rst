@@ -1,5 +1,5 @@
 MagicA Documentation
-===================
+====================
 
 .. image:: _static/magica_logo_whitebg.svg
    :alt: MagicA Logo

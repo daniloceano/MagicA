@@ -37,7 +37,7 @@ Start by fitting a distribution to your data:
     print(f"Fitted parameters: {params}")
 
 Goodness-of-Fit Testing
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Evaluate how well your distribution fits the data:
 
@@ -56,7 +56,7 @@ Evaluate how well your distribution fits the data:
     print(f"RMSE: {rmse_result['rmse']}")
 
 Monte Carlo Stability Analysis
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Determine the minimum sample size needed for stable parameter estimation:
 
@@ -100,7 +100,7 @@ Advanced Examples
 -----------------
 
 Custom Binning Strategy
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Control the binning strategy for chi-square tests:
 
@@ -112,14 +112,14 @@ Control the binning strategy for chi-square tests:
         tests=['chi2'],
         bins='scott',
         plot_type='boxplots',
-        output_path='chi2_boxplots.png'
+        fig_output_path='chi2_boxplots.png'
     )
     
     # Access chi-square test results
     chi2_pvalues = results['chi2_pvalue']
 
 Pre-calculated Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use known distribution parameters instead of fitting (special use case):
 
@@ -135,7 +135,7 @@ Use known distribution parameters instead of fitting (special use case):
     )
 
 Custom Fitting Constraints
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Apply parameter constraints during fitting:
 
@@ -156,7 +156,7 @@ Apply parameter constraints during fitting:
     )
 
 Pre-calculated Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use known distribution parameters instead of fitting:
 
@@ -175,7 +175,7 @@ Use known distribution parameters instead of fitting:
     assert np.allclose(results['param_0'].values, 2.0)
 
 Custom Fitting Options
-~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 Pass additional arguments to the fitting process:
 
@@ -191,7 +191,7 @@ Pass additional arguments to the fitting process:
     results['param_0'].plot(x='sizes', hue='repeats', alpha=0.3)
 
 Understanding Results
---------------------
+---------------------
 
 The `monte_carlo_fit` method returns an xarray Dataset with:
 
@@ -260,7 +260,7 @@ You can still craft custom visualizations directly with xarray / matplotlib:
     results['param_0'].plot(x='sizes')
 
 Supported Distributions
-----------------------
+-----------------------
 
 MagicA supports all continuous distributions from scipy.stats, including:
 

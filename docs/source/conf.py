@@ -11,6 +11,10 @@ copyright = '2025, Danilo Couto de Souza'
 author = 'Danilo Couto de Souza'
 release = '0.1.0'
 
+# Ensure project root on sys.path for autodoc (so 'magica' can be imported)
+import os, sys
+sys.path.insert(0, os.path.abspath('../..'))
+
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
@@ -23,7 +27,6 @@ extensions = [
     'sphinx.ext.githubpages',
     'myst_parser',
     'nbsphinx',
-    'sphinx_rtd_theme',
 ]
 
 templates_path = ['_templates']
@@ -101,9 +104,3 @@ myst_enable_extensions = [
 
 # nbsphinx settings
 nbsphinx_execute = 'never'  # Don't execute notebooks during build
-
-# Source file suffixes
-source_suffix = {
-    '.rst': None,
-    '.md': 'myst_parser',
-}

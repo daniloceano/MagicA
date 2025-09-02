@@ -111,7 +111,7 @@ xarray.Dataset with:
   - `figure_path`: Path to saved 2x3 summary figure (only if fig_output_path was provided). A red dashed vertical line marks the detected stability size per variable.
 
 Goodness-of-Fit Testing
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
 
 The class provides comprehensive goodness-of-fit testing with multiple methods:
 
@@ -125,7 +125,7 @@ Non-parametric test comparing empirical and theoretical cumulative distribution 
 Measures the average deviation between empirical and theoretical distributions.
 
 Utility Methods
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~
 
 **Binning Strategies:**
 

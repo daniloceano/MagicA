@@ -579,7 +579,7 @@ class MagicAdjuster:
             Number of subsamples (repetitions) for each size.
         tests : list[str], default=['ks']
             Goodness-of-fit tests to perform. Options: 'ks', 'chi2', 'rmse'.
-    fig_output_path : str, optional
+        fig_output_path : str, optional
             When provided, a 2x3 summary figure is generated and saved to this
             path. The Dataset attribute 'figure_path' will contain the path.
             If None (default) no figure is created (saves time in large runs).
