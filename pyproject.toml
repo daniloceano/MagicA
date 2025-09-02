@@ -32,6 +32,7 @@ dependencies = [
     "matplotlib>=3.4.0",
     "seaborn>=0.11.0",
     "scikit-learn>=1.0.0",
+    "xarray>=0.16.0",
 ]
 
 [project.optional-dependencies]
@@ -44,11 +45,14 @@ dev = [
     "mypy>=0.910",
     "jupyter>=1.0",
     "notebook>=6.0",
+    "tqdm>=4.0",
 ]
 docs = [
     "sphinx>=4.0",
     "sphinx-rtd-theme>=1.0",
     "myst-parser>=0.15",
+    "tqdm>=4.0",
+    "xarray>=0.16.0",
 ]
 
 [project.urls]

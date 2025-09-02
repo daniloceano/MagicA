@@ -5,9 +5,19 @@ Statistical distribution fitting and adjustment for wind data
 from matplotlib.pylab import seed
 import numpy as np
 from scipy import stats
+import xarray as xr
 from sklearn.metrics import root_mean_squared_error
 from typing import Union, Dict, Any, Optional, Tuple, List
 import warnings
+
+# Optional progress bars
+try:  # pragma: no cover - fallback definition
+    from tqdm import tqdm, trange
+except Exception:  # pragma: no cover
+    def tqdm(iterable, **kwargs):
+        return iterable
+    def trange(n, **kwargs):
+        return range(n)
 
 from .data_processor import DataProcessor
 
@@ -408,7 +418,7 @@ class MagicAdjuster:
 
         return num_bins
 
-    def goodness_of_fit(self, method: str, bins: Union[str, int] = 'doane'):
+    def goodness_of_fit(self, method: str, bins: Union[str, int] = 'doane', warn_on_normalization: bool = True):
         if method.lower() in ['chisquared', 'chi2']:
             n_bins = self.get_num_bins(bins)
             params = self.fitted_params
@@ -424,7 +434,7 @@ class MagicAdjuster:
 
             # Check if normalization is needed
             discrepancy = abs(expected_freq.sum() - observed_freq.sum())
-            if discrepancy > 1e-6:
+            if discrepancy > 1e-6 and warn_on_normalization:
                 warnings.warn(f"Normalizing expected frequencies. Original sum: {expected_freq.sum():.6f}, "
                             f"Target sum: {observed_freq.sum()}")
 
@@ -539,98 +549,217 @@ class MagicAdjuster:
         return indices
 
     def monte_carlo_fit(
-            self,
-            sample_sizes: Optional[List[int]] = None,
-            n_subsamples: int = 20,
-            n_repeats: Optional[int] = None,
-            min_size: int = 100,
-            sampling: str = 'disjoint',  # 'random'|'disjoint'|'bootstrap'
-            seed: Optional[int] = None,
-            distribution: Optional[Union[str, object]] = None,
-            tests: Optional[List[str]] = None,  # e.g. ['chi2','ks','rmse'] or None -> ['chi2']
-            bins: Union[str, int] = 'doane',
-            n_jobs: int = 1,
-            store_raw: bool = False,
-            fit_kwargs: Optional[Dict[str, Any]] = None,
-        ) -> Dict[str, Any]:
+        self,
+        sizes: Optional[List[int]] = None,
+        n_repeats: int = 20,
+        tests: List[str] = ['ks'],
+    fig_output_path: Optional[str] = None,
+        plot_type: str = 'series',
+        sampling: str = 'random',
+        seed: Optional[int] = None,
+        min_size: int = 50,
+        max_size: Optional[int] = None,
+        n_sizes: int = 10,
+        distribution_params: Optional[Tuple] = None,
+        **kwargs
+    ) -> 'xr.Dataset':
         """
-        Monte Carlo orchestration (index generation stage).
-
-        Behavior:
-        - If `sample_sizes` is provided (list of ints), those sizes are used.
-        - If `sample_sizes` is None, a grid of `n_subsamples` sizes is generated
-          between `min_size` and the full sample size.
+        Perform Monte Carlo stability analysis for distribution fitting.
+        
+        This method evaluates how stable distribution parameters and goodness-of-fit
+        statistics are across different sample sizes, helping determine the minimum
+        sample size needed for reliable parameter estimation.
 
         Parameters
         ----------
-        sample_sizes : list[int], optional
-            Explicit list of subsample sizes to evaluate (e.g. [100, 145, 190]).
-            If None, sizes will be generated using `n_subsamples` and `min_size`.
-        n_subsamples : int
-            When `sample_sizes` is None, number of distinct sizes to generate.
-        n_repeats : int, optional
-            Number of subsamples (repeats) to generate per size. If None a sensible
-            default is chosen based on the smallest size.
-        min_size : int
-            Minimum subsample size used when building the grid.
-        sampling : {'random','bootstrap','disjoint'}
-            Sampling strategy passed to `_generate_subsample_indices`.
+        sizes : list[int], optional
+            Explicit list of sample sizes to test. If None, a grid of sizes
+            between min_size and max_size is created.
+        n_repeats : int, default=20
+            Number of subsamples (repetitions) for each size.
+        tests : list[str], default=['ks']
+            Goodness-of-fit tests to perform. Options: 'ks', 'chi2', 'rmse'.
+    fig_output_path : str, optional
+            When provided, a 2x3 summary figure is generated and saved to this
+            path. The Dataset attribute 'figure_path' will contain the path.
+            If None (default) no figure is created (saves time in large runs).
+        plot_type : {'series','boxplots'}, default='series'
+            Visual style per panel. 'series' plots medians with IQR shading;
+            'boxplots' draws boxplots per size.
+        sampling : {'random','bootstrap','disjoint'}, default='random'
+            Sampling strategy for subsamples.
         seed : int, optional
-            RNG seed for reproducibility.
+            Random seed for reproducibility (propagated to subsamples).
+        min_size : int, default=50
+            Minimum sample size when auto-generating sizes.
+        max_size : int, optional
+            Maximum sample size. Defaults to full dataset if None.
+        n_sizes : int, default=10
+            Number of sizes in automatically generated grid.
+        distribution_params : tuple, optional
+            If provided, these fixed parameters are used for all subsamples
+            (no refitting). Use only for scenarios evaluating GOF with known
+            parameters. If None (default), each subsample is refitted.
+        **kwargs
+            - bins : int or str, default='doane'
+                Binning for chi-square test.
+            - fit_kwargs : dict
+                Passed to fit_distribution for parameter constraints (e.g.,
+                fit_kwargs={'floc': 0}).
 
         Returns
         -------
-        dict
-            Results dict with generated sizes and index arrays per size:
-            {
-                'sizes': np.ndarray,
-                'indices': { size_int: ndarray(shape=(n_repeats, size)), ... },
-                'meta': {...}
-            }
+        xarray.Dataset
+            Monte Carlo results with dimensions:
+            
+            - **sizes** : Sample sizes tested
+            - **repeats** : Repetition index for each size
+            
+            Data variables include:
+            
+            - **param_0, param_1, ...** : Fitted distribution parameters
+            - **ks_statistic, ks_pvalue** : Kolmogorov-Smirnov test results
+            - **chi2_statistic, chi2_pvalue** : Chi-square test results  
+            - **rmse** : Root mean square error values
+            
+            Attributes include:
+            - **distribution** : Distribution name
+            - **original_data_size** : Size of original dataset
+            - **sampling_method** : Sampling strategy used
+            - **bins_method** : Binning method for chi-square test
+            - **stability_points** : Detected stability points per variable
+            - **figure_path** : Path to saved 2x3 summary figure (only if generated)
+
+        Examples
+        --------
+        >>> # Basic usage - each subsample gets independent fit
+        >>> results = adjuster.monte_carlo_fit(n_repeats=50, tests=['ks', 'chi2'])
+        >>> print(results.sizes.values)  # Sample sizes tested
+        >>> ks_pvalues = results['ks_pvalue']  # Access KS p-values directly
+        
+        >>> # Use fit constraints (e.g., fix location for Weibull)
+        >>> results = adjuster.monte_carlo_fit(
+        ...     n_repeats=100, 
+        ...     tests=['chi2', 'ks'],
+        ...     fit_kwargs={'floc': 0}  # Fix location parameter
+        ... )
+        
+        >>> # Use pre-calculated parameters (bypass fitting entirely)
+        >>> known_params = (2.0, 0.0, 1.0)  # shape, loc, scale
+        >>> results = adjuster.monte_carlo_fit(
+        ...     distribution_params=known_params,
+        ...     n_repeats=50,
+        ...     tests=['chi2', 'ks']
+        ... )
+        
+        >>> # Select specific size and calculate statistics
+        >>> size_200_data = results.sel(sizes=200)
+        >>> param_medians = results['param_0'].median(dim='repeats')
+        
+        >>> # Check stability points
+        >>> stability = results.attrs['stability_points']
+        >>> print(f"KS test stabilizes at size: {stability['ks_pvalue']['size']}")
+
+        Notes
+        -----
+        **Fitting Strategy:**
+        
+        By default, each subsample gets an independent fit to evaluate how parameter
+        estimates change with sample size. This is the correct approach for stability
+        analysis since parameter estimation quality depends on sample size.
+        
+        **Parameter Constraints:**
+        
+        Use `fit_kwargs` to impose constraints during fitting (e.g., `floc=0` for 
+        Weibull distributions). These constraints apply to all subsample fits.
+        
+        **Pre-calculated Parameters:**
+        
+        Use `distribution_params` only when you want to evaluate goodness-of-fit
+        with known/fixed parameters across all sample sizes, bypassing fitting entirely.
+        
+        **Stability Detection:**
+        
+        The method detects stability by looking for sample sizes where:
+        
+        1. Test statistics (p-values) become stable across sizes
+        2. Parameter estimates converge to consistent values
+        
+        A moving window approach identifies the first size where values
+        remain stable within a tolerance threshold. Stability points are
+        stored in the Dataset attributes for easy access.
         """
+
+        # Extract kwargs
+        bins = kwargs.get('bins', 'doane')
+        fit_kwargs = kwargs.get('fit_kwargs', {})
+        
         N = len(self.data)
         if N == 0:
             raise ValueError("No data available for monte_carlo_fit.")
 
         # Determine sizes
-        if sample_sizes is None:
-            min_size = max(1, int(min_size))
-            sizes = np.unique(np.linspace(min_size, N, int(n_subsamples), dtype=int))
+        if sizes is None:
+            if max_size is None:
+                max_size = N
+            sizes = np.unique(np.linspace(min_size, max_size, n_sizes, dtype=int))
             sizes = sizes[sizes > 0]
             if sizes.size == 0:
-                raise ValueError("Generated empty sizes grid; check min_size and n_subsamples values.")
+                raise ValueError("Generated empty sizes grid; check min_size and n_sizes values.")
         else:
-            sizes = np.unique(np.asarray(sample_sizes, dtype=int))
+            sizes = np.unique(np.asarray(sizes, dtype=int))
             if sizes.size == 0:
-                raise ValueError("`sample_sizes` provided is empty or invalid")
+                raise ValueError("`sizes` provided is empty or invalid")
 
         # Determine repeats per size
         if n_repeats is None:
             smallest = int(sizes[0])
             n_repeats = max(10, min(100, N // smallest))
 
-        results: Dict[str, Any] = {
-            'sizes': sizes,
-            'indices': {},
-            'results': {},  # per-size -> list of per-repeat dicts with params and gof
-            'meta': {
-                'n_sizes': int(sizes.size),
-                'n_repeats': int(n_repeats),
-                'n_subsamples_param': int(n_subsamples),
-                'sampling': sampling,
-                'seed': seed,
-                'min_size': int(min_size)
-            }
-        }
+        test_list = [t.lower() for t in tests] if tests is not None else ['ks']
+        
+        # Determine max number of parameters
+        if distribution_params is not None:
+            # Use pre-calculated parameters to determine count
+            max_params = len(distribution_params)
+        else:
+            # Fit a small sample to determine parameter count
+            sample_idx = np.random.choice(len(self.data), min(100, len(self.data)), replace=False)
+            sample_data = self.data[sample_idx]
+            temp_dp = DataProcessor(sample_data)
+            temp_adj = temp_dp._get_adjuster()
+            temp_adj.fit_distribution(self.fitted_distribution, **fit_kwargs)
+            max_params = len(temp_adj.get_fitted_params())
 
+        # Initialize data arrays
+        n_sizes = len(sizes)
+        param_arrays = {}
+        for i in range(max_params):
+            param_arrays[f'param_{i}'] = np.full((n_sizes, n_repeats), np.nan)
+
+        # Initialize test result arrays
+        test_arrays = {}
+        for test in test_list:
+            if test == 'ks':
+                test_arrays['ks_statistic'] = np.full((n_sizes, n_repeats), np.nan)
+                test_arrays['ks_pvalue'] = np.full((n_sizes, n_repeats), np.nan)
+            elif test == 'chi2':
+                test_arrays['chi2_statistic'] = np.full((n_sizes, n_repeats), np.nan)
+                test_arrays['chi2_pvalue'] = np.full((n_sizes, n_repeats), np.nan)
+            elif test == 'rmse':
+                test_arrays['rmse'] = np.full((n_sizes, n_repeats), np.nan)
+
+        # Setup random seeds
         if seed is None:
-            child_seq = [None] * sizes.size
+            child_seq = [None] * n_sizes
         else:
             ss = np.random.SeedSequence(seed)
-            child_seq = ss.spawn(sizes.size)  # list of SeedSequence objects
+            child_seq = ss.spawn(n_sizes)
 
-        for i, size in enumerate(sizes):
-            child_seed = child_seq[i]  # either SeedSequence or None
+        # Main Monte Carlo loop
+        sizes_iter = tqdm(list(enumerate(sizes)), desc='Monte Carlo sizes')
+        for i, size in sizes_iter:
+            child_seed = child_seq[i]
 
             idx_list = self._generate_subsample_indices(
                 size=int(size),
@@ -639,82 +768,376 @@ class MagicAdjuster:
                 seed=child_seed
             )
 
-            try:
-                idx_arr = np.asarray(idx_list, dtype=int)
-            except Exception:
-                idx_arr = idx_list
-
-            results['indices'][int(size)] = idx_arr
-
-            # Now run fits + goodness-of-fit for each repeat
-            per_size_results = []
-            # determine which tests to run
-            test_list = [t.lower() for t in tests] if tests is not None else ['chi2']
-
-            for rep_i in range(len(idx_list)):
-                rep_result: Dict[str, Any] = {'params': None, 'gof': {}, 'error': None}
+            # Inner progress bar for repeats
+            rep_iter = trange(len(idx_list), desc=f'size={size}', leave=False)
+            for rep_j in rep_iter:
                 try:
-                    sub_idx = idx_list[rep_i]
+                    sub_idx = idx_list[rep_j]
                     subdata = self.data[sub_idx]
 
-                    # create temporary DataProcessor and fit
+                    # Create temporary adjuster
                     dp = DataProcessor(subdata)
                     adj = dp._get_adjuster()
 
-                    # choose distribution: explicit param > existing fitted in self
-                    dist_to_fit = distribution if distribution is not None else self.fitted_distribution
-                    if dist_to_fit is None:
-                        raise ValueError("No distribution provided and no fitted distribution available on self.")
+                    if self.fitted_distribution is None:
+                        raise ValueError("No fitted distribution available.")
 
-                    # fit
-                    adj.fit_distribution(dist_to_fit, **(fit_kwargs or {}))
-                    params = adj.get_fitted_params()
-                    rep_result['params'] = params
+                    # Always fit new parameters for each subsample
+                    # Use distribution_params only if explicitly provided (for pre-calculated scenarios)
+                    if distribution_params is not None:
+                        # Use pre-calculated parameters (bypass fitting)
+                        adj.fitted_distribution = self.fitted_distribution
+                        adj.fitted_params = distribution_params
+                        params = distribution_params
+                    else:
+                        # Fit new parameters with optional constraints from fit_kwargs
+                        adj.fit_distribution(self.fitted_distribution, **fit_kwargs)
+                        params = adj.get_fitted_params()
 
-                    # run requested goodness-of-fit tests
-                    if 'chi2' in test_list:
+                    # Store parameters
+                    for param_idx, param_val in enumerate(params):
+                        if param_idx < max_params:
+                            param_arrays[f'param_{param_idx}'][i, rep_j] = param_val
+
+                    # Run goodness-of-fit tests
+                    for test in test_list:
                         try:
-                            chi_res = adj.goodness_of_fit('chi2', bins=bins)
-                            rep_result['gof']['chi2'] = chi_res
-                        except Exception as e:
-                            rep_result['gof']['chi2'] = {'error': str(e)}
+                            if test == 'ks':
+                                ks_res = adj.goodness_of_fit('ks')
+                                test_arrays['ks_statistic'][i, rep_j] = ks_res.get('statistic', ks_res.get('ks_statistic', np.nan))
+                                test_arrays['ks_pvalue'][i, rep_j] = ks_res.get('p_value', np.nan)
+                            elif test == 'chi2':
+                                chi_res = adj.goodness_of_fit('chi2', bins=bins, warn_on_normalization=False)
+                                test_arrays['chi2_statistic'][i, rep_j] = chi_res.get('statistic', chi_res.get('chi2_statistic', np.nan))
+                                test_arrays['chi2_pvalue'][i, rep_j] = chi_res.get('p_value', np.nan)
+                            elif test == 'rmse':
+                                rmse_res = adj.goodness_of_fit('rmse')
+                                test_arrays['rmse'][i, rep_j] = rmse_res.get('rmse', np.nan)
+                        except Exception:
+                            # Values remain NaN for failed tests
+                            pass
 
-                    if 'ks' in test_list:
-                        try:
-                            ks_res = adj.goodness_of_fit('ks')
-                            rep_result['gof']['ks'] = ks_res
-                        except Exception as e:
-                            rep_result['gof']['ks'] = {'error': str(e)}
+                except Exception:
+                    # Values remain NaN for failed fits
+                    pass
 
-                    if 'rmse' in test_list:
-                        try:
-                            rmse_res = adj.goodness_of_fit('rmse', bins=bins)
-                            rep_result['gof']['rmse'] = rmse_res
-                        except Exception as e:
-                            rep_result['gof']['rmse'] = {'error': str(e)}
+        # Create xarray Dataset
+        data_vars = {}
+        data_vars.update(param_arrays)
+        data_vars.update(test_arrays)
 
-                except Exception as e:
-                    rep_result['error'] = str(e)
+        coords = {
+            'sizes': sizes,
+            'repeats': np.arange(n_repeats)
+        }
 
-                per_size_results.append(rep_result)
+        # Detect stability points
+        stability_points = self._detect_stability_points(data_vars, sizes)
 
-            results['results'][int(size)] = per_size_results
+        # Optionally create & save figure
+        figure_path = None
+        if fig_output_path is not None:
+            try:
+                fig = self._create_monte_carlo_figure(data_vars, sizes, plot_type, stability_points)
+                if fig is not None:
+                    fig.savefig(fig_output_path, dpi=150, bbox_inches='tight')
+                    figure_path = fig_output_path
+            except Exception:
+                figure_path = None
 
-        # --- Aggregation and CPS (stability) detection ---
-        # Which tests to summarize
-        test_list = [t.lower() for t in tests] if tests is not None else ['chi2']
+        # Create Dataset (all numeric data only)
+        ds = xr.Dataset(
+            data_vars={name: (['sizes', 'repeats'], array) for name, array in data_vars.items()},
+            coords=coords,
+            attrs={
+                'distribution': self.distribution_name or str(self.fitted_distribution),
+                'original_data_size': N,
+                'sampling_method': sampling,
+                'bins_method': bins,
+                'stability_points': stability_points,
+                'figure_path': figure_path,
+                'created_by': 'MagicAdjuster.monte_carlo_fit'
+            }
+        )
 
+        return ds
+
+    def _detect_stability_points(self, data_vars: Dict[str, np.ndarray], sizes: np.ndarray) -> Dict[str, Dict[str, Any]]:
+        """
+        Detect stability points for each variable using coefficient of variation.
+        
+        A variable is considered stable when its coefficient of variation
+        (std/mean) across repeats becomes consistently low.
+        """
+        stability_points = {}
+        window_size = max(2, len(sizes) // 4)  # Use 25% of sizes as window
+        cv_threshold = 0.1  # 10% coefficient of variation threshold
+        
+        for var_name, data_array in data_vars.items():
+            if np.all(np.isnan(data_array)):
+                continue
+                
+            # Calculate coefficient of variation for each size
+            cv_values = []
+            for i in range(len(sizes)):
+                size_data = data_array[i, :]
+                valid_data = size_data[~np.isnan(size_data)]
+                if len(valid_data) > 1:
+                    mean_val = np.mean(valid_data)
+                    std_val = np.std(valid_data)
+                    cv = std_val / abs(mean_val) if mean_val != 0 else np.inf
+                    cv_values.append(cv)
+                else:
+                    cv_values.append(np.inf)
+            
+            # Find first point where CV stays below threshold for window_size consecutive points
+            stable_idx = None
+            for i in range(len(cv_values) - window_size + 1):
+                window_cvs = cv_values[i:i + window_size]
+                if all(cv < cv_threshold for cv in window_cvs if not np.isinf(cv)):
+                    stable_idx = i
+                    break
+            
+            if stable_idx is not None:
+                stability_points[var_name] = {
+                    'size': int(sizes[stable_idx]),
+                    'index': stable_idx,
+                    'cv_at_stability': cv_values[stable_idx]
+                }
+            else:
+                stability_points[var_name] = {
+                    'size': None,
+                    'index': None,
+                    'cv_at_stability': None
+                }
+        
+        return stability_points
+
+    def _create_monte_carlo_figure(
+        self,
+        data_vars: Dict[str, np.ndarray],
+        sizes: np.ndarray,
+        plot_type: str,
+        stability_points: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
+        """Create 2x3 summary figure (row 1: parameters, row 2: test p-values/statistics).
+
+        Draws a vertical dashed red line at the stability sample size for each
+        variable if available in stability_points.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:  # pragma: no cover
+            return None
+
+        # Select up to first 3 parameter variables
+        param_names = sorted([k for k in data_vars if k.startswith('param_')])[:3]
+        if not param_names:
+            return None  # Nothing meaningful to show
+
+        # Preferred order for test panels (only keep those present)
+        preferred_tests = ["ks_pvalue", "chi2_pvalue", "rmse"]
+        test_names = [t for t in preferred_tests if t in data_vars][:3]
+
+        # Always build a 2x3 grid; hide unused axes
+        fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
+        axes_flat = axes.ravel()
+
+        def _panel(ax, data: np.ndarray, title: str, var_name: str):
+            if plot_type == 'boxplots':
+                box_data = [data[i, ~np.isnan(data[i, :])] for i in range(len(sizes))]
+                if len(sizes) > 1:
+                    width = max(1, (sizes[1] - sizes[0]) * 0.6)
+                else:
+                    width = 5
+                ax.boxplot(box_data, positions=sizes, widths=width)
+            else:  # series
+                med = np.nanmedian(data, axis=1)
+                q25 = np.nanpercentile(data, 25, axis=1)
+                q75 = np.nanpercentile(data, 75, axis=1)
+                ax.plot(sizes, med, 'o-', lw=1.4, label='Median')
+                ax.fill_between(sizes, q25, q75, alpha=0.25, label='IQR')
+                ax.legend(frameon=False, fontsize=8)
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+            # Stability vertical line if exists
+            if stability_points:
+                sp = stability_points.get(var_name)
+                if sp and sp.get('size') is not None:
+                    try:
+                        ax.axvline(sp['size'], color='red', linestyle='--', linewidth=1, alpha=0.85)
+                    except Exception:
+                        pass
+
+        # Parameter panels (row 0)
+        for col, pname in enumerate(param_names):
+            ax = axes[0, col]
+            _panel(ax, data_vars[pname], pname.replace('_', ' ').title(), pname)
+            ax.set_ylabel('Value')
+        # Hide unused param axes in row 0
+        for col in range(len(param_names), 3):
+            axes[0, col].axis('off')
+
+        # Test panels (row 1)
+        for col, tname in enumerate(test_names):
+            ax = axes[1, col]
+            label = tname.replace('_', ' ').title()
+            _panel(ax, data_vars[tname], label, tname)
+            ax.set_xlabel('Sample Size')
+            if col == 0:
+                ax.set_ylabel('Value')
+        for col in range(len(test_names), 3):
+            axes[1, col].axis('off')
+
+        # Shared formatting
+        for ax in axes_flat:
+            if ax.has_data():
+                ax.tick_params(axis='x', rotation=0)
+
+        fig.suptitle('Monte Carlo Stability Summary', fontsize=14)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        return fig
+
+    def _make_boxplots_figure(
+        self,
+        sizes: np.ndarray,
+        summary: Dict[str, Any],
+        param_values_per_size: Dict[int, List[List[float]]],
+        test_list: List[str],
+        max_params: int,
+    ):
+        """
+        Build and return a matplotlib Figure with boxplots for the chosen test and
+        up to the first three fitted parameters. Returns None on failure or when
+        matplotlib is not available.
+
+        Parameters
+        ----------
+        sizes
+            Array-like of sample sizes used as x-axis labels.
+        summary
+            The summary dict generated by monte_carlo_fit (contains 'tests').
+        param_values_per_size
+            Mapping param_index -> list-of-lists of values per sample size.
+        test_list
+            List of test names (e.g. ['chi2', 'ks']). The first entry is used for
+            the primary boxplot.
+        max_params
+            Maximum number of parameters discovered during fitting.
+
+        Returns
+        -------
+        matplotlib.figure.Figure or None
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except Exception:
+            return None
+
+        try:
+            n_param_plots = min(3, max_params)
+
+            # main figure: p-values / metric boxplots
+            fig_main, ax_main = plt.subplots(1, 1, figsize=(10, 4), constrained_layout=True)
+            bp_data = summary['tests'][test_list[0]]['values_per_size']
+            ax_main.boxplot(bp_data, labels=[str(s) for s in sizes], showfliers=False)
+            ax_main.set_title(f"CPS boxplot for {test_list[0]}")
+            ax_main.set_xlabel('sample size')
+            ax_main.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
+
+            fig_params = None
+            if n_param_plots > 0:
+                fig_params, axes = plt.subplots(n_param_plots, 1, figsize=(10, 3 * n_param_plots), constrained_layout=True)
+                if n_param_plots == 1:
+                    axes = [axes]
+                for pi in range(n_param_plots):
+                    ax = axes[pi]
+                    pdata = param_values_per_size.get(pi, [])
+                    ax.boxplot(pdata, labels=[str(s) for s in sizes], showfliers=False)
+                    ax.set_title(f'Parameter {pi} distribution across sample sizes')
+                    ax.set_xlabel('sample size')
+                    ax.set_ylabel(f'param_{pi}')
+
+            return fig_main, fig_params
+        except Exception:
+            return None, None
+
+    def _make_series_figure(
+        self,
+        sizes: np.ndarray,
+        summary: Dict[str, Any],
+        param_values_per_size: Dict[int, List[List[float]]],
+        test_list: List[str],
+        max_params: int,
+    ):
+        """
+        Build and return a matplotlib Figure showing a series (line) for the chosen
+        test medians across sample sizes, with shaded area showing dispersion (e.g.
+        25-75 percentile). Also plots medians for up to three parameters with shaded
+        dispersion. Returns None on failure or when matplotlib is not available.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except Exception:
+            return None
+
+        try:
+            fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
+
+            # Prepare test median and quartiles
+            vals = summary['tests'][test_list[0]]['values_per_size']
+            medians = [np.median(v) if len(v) > 0 else np.nan for v in vals]
+            q1 = [np.percentile(v, 25) if len(v) > 0 else np.nan for v in vals]
+            q3 = [np.percentile(v, 75) if len(v) > 0 else np.nan for v in vals]
+
+            x = np.arange(len(sizes))
+            ax.plot(x, medians, marker='o', label=f'{test_list[0]} median')
+            ax.fill_between(x, q1, q3, alpha=0.3, label=f'{test_list[0]} 25-75%')
+            ax.set_xticks(x)
+            ax.set_xticklabels([str(s) for s in sizes], rotation=45)
+            ax.set_xlabel('sample size')
+            ax.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
+            ax.set_title(f'Stability series for {test_list[0]}')
+            ax.legend()
+
+            # parameter series (up to 3)
+            n_param_plots = min(3, max_params)
+            fig_params = None
+            if n_param_plots > 0:
+                fig_params, axes = plt.subplots(n_param_plots, 1, figsize=(10, 3 * n_param_plots), constrained_layout=True)
+                if n_param_plots == 1:
+                    axes = [axes]
+                for pi in range(n_param_plots):
+                    pdata = param_values_per_size.get(pi, [])
+                    meds = [np.median(v) if len(v) > 0 else np.nan for v in pdata]
+                    q1p = [np.percentile(v, 25) if len(v) > 0 else np.nan for v in pdata]
+                    q3p = [np.percentile(v, 75) if len(v) > 0 else np.nan for v in pdata]
+                    axp = axes[pi]
+                    axp.plot(x, meds, marker='o', label=f'param_{pi} median')
+                    axp.fill_between(x, q1p, q3p, alpha=0.25, label='25-75%')
+                    axp.set_xticks(x)
+                    axp.set_xticklabels([str(s) for s in sizes], rotation=45)
+                    axp.set_xlabel('sample size')
+                    axp.set_ylabel(f'param_{pi}')
+                    axp.legend()
+
+            return fig, fig_params
+        except Exception:
+            return None
+
+    def _aggregate_and_detect_stability(
+        self,
+        results: Dict[str, Any],
+        sizes: np.ndarray,
+        test_list: List[str],
+        max_params: int,
+    ) -> Tuple[Dict[str, Any], Dict[int, List[List[float]]], Dict[int, List[float]]]:
+        """
+        Aggregate monte carlo `results` and detect stability (CPS) for tests and parameters.
+
+        Returns (summary, param_values_per_size, param_medians)
+        """
         summary: Dict[str, Any] = {'sizes': sizes.tolist(), 'tests': {}, 'params': {}}
-
-        # Collect parameter values per size
-        # determine max number of params returned by fits
-        max_params = 0
-        for size in sizes:
-            per = results['results'].get(int(size), [])
-            for rep in per:
-                if rep.get('params') is None:
-                    continue
-                max_params = max(max_params, len(rep['params']))
 
         # For each test, compute list of p-values (or metric) per size
         for test in test_list:
@@ -733,7 +1156,6 @@ class MagicAdjuster:
                         if p is not None:
                             vals.append(float(p))
                         else:
-                            # try statistic value fallback
                             stat = entry.get('chi2_statistic') or entry.get('ks_statistic')
                             if stat is not None:
                                 vals.append(float(stat))
@@ -755,7 +1177,7 @@ class MagicAdjuster:
                 for j in range(0, len(medians) - window + 1):
                     window_vals = medians[j:j+window]
                     if np.all(np.isfinite(window_vals)) and (np.nanmax(window_vals) - np.nanmin(window_vals) <= tol):
-                        inflection_idx = j + (window - 1)  # choose end of stable window
+                        inflection_idx = j + (window - 1)
                         break
 
             inflection_size = int(sizes[inflection_idx]) if inflection_idx is not None else None
@@ -772,7 +1194,6 @@ class MagicAdjuster:
         param_values_per_size = {p: [] for p in range(max_params)}
         for size in sizes:
             reps = results['results'].get(int(size), [])
-            # for each param index, collect values across repeats
             cols = {p: [] for p in range(max_params)}
             for rep in reps:
                 params = rep.get('params')
@@ -808,46 +1229,27 @@ class MagicAdjuster:
             summary['params']['inflection_index'] = None
             summary['params']['inflection_size'] = None
 
-        results['summary'] = summary
-
-        # --- Create figure: boxplots for tests and first up to 3 parameters ---
-        try:
-            import matplotlib.pyplot as plt
-
-            n_param_plots = min(3, max_params)
-            n_test_plots = len(test_list)
-            total_rows = 1 + n_param_plots
-            fig, axes = plt.subplots(total_rows, 1, figsize=(8, 3 * total_rows), constrained_layout=True)
-            if total_rows == 1:
-                axes = [axes]
-
-            # p-values / metric boxplots
-            p_axes = axes[0]
-            bp_data = [summary['tests'][t]['values_per_size'] for t in [test_list[0]]][0]
-            # boxplot expects list of sequences per x position
-            p_axes.boxplot(bp_data, labels=[str(s) for s in sizes], showfliers=False)
-            p_axes.set_title(f"CPS boxplot for {test_list[0]}")
-            p_axes.set_xlabel('sample size')
-            p_axes.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
-
-            # parameter boxplots for first up to 3 params
-            for pi in range(n_param_plots):
-                ax = axes[1 + pi]
-                pdata = param_values_per_size.get(pi, [])
-                ax.boxplot(pdata, labels=[str(s) for s in sizes], showfliers=False)
-                ax.set_title(f'Parameter {pi} distribution across sample sizes')
-                ax.set_xlabel('sample size')
-                ax.set_ylabel(f'param_{pi}')
-
-            results['figure'] = fig
-        except Exception:
-            # figure generation is optional; ignore errors and continue
-            results['figure'] = None
-
-        return results
+        return summary, param_values_per_size, param_medians
+        
 
 
 ## TO-DO:
+    def _detect_stability(self, results: Dict[str, Any], sizes: np.ndarray) -> Dict[str, Any]:
+        """Detect stability in Monte Carlo results using moving window approach."""
+        # Simple implementation - can be enhanced later
+        return {
+            'stable_size': None,
+            'window_size': 3,
+            'tolerance': 0.1,
+            'is_stable': False
+        }
+    
+    def _create_stability_plot(self, results: Dict[str, Any]) -> tuple:
+        """Create stability plots for Monte Carlo results."""
+        # Simple implementation returning None figures - can be enhanced later
+        return (None, None)
+
+
 # When set a new distribution to an already used variable, it will override the distribution form previous variable
 # For example:
 # fitted_data_weibull = data.fit_distribution('weibull')
