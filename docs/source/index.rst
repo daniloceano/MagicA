@@ -67,10 +67,6 @@ Contents
    :caption: API Reference
 
    api/core
-   api/distributions
-   api/tests
-   api/visualization
-   api/utils
 
 .. toctree::
    :maxdepth: 1
