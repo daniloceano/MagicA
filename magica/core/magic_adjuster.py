@@ -6,18 +6,9 @@ from matplotlib.pylab import seed
 import numpy as np
 from scipy import stats
 import xarray as xr
-from sklearn.metrics import root_mean_squared_error
 from typing import Union, Dict, Any, Optional, Tuple, List
 import warnings
-
-# Optional progress bars
-try:  # pragma: no cover - fallback definition
-    from tqdm import tqdm, trange
-except Exception:  # pragma: no cover
-    def tqdm(iterable, **kwargs):
-        return iterable
-    def trange(n, **kwargs):
-        return range(n)
+from tqdm import tqdm, trange
 
 from .data_processor import DataProcessor
 
