@@ -9,6 +9,12 @@ API Usage Tutorial
 .. include:: api_usage.md
    :parser: myst_parser.sphinx_
 
+Monte Carlo stability tutorial
+------------------------------
+
+.. include:: monte_carlo.rst
+   :parser: restructuredtext
+
 Weibull Fit Example
 ------------------
 
