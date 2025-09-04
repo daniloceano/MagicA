@@ -141,10 +141,62 @@ The class supports multiple binning strategies for histogram-based tests:
 
 - `_generate_subsample_indices()`: Creates index lists for different sampling strategies
 
-Note
-----
+Sampling strategies (didactic)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The `MagicAdjuster` class provides a helper method `_generate_subsample_indices`
-that is used by the Monte Carlo fitting utilities to create subsample index lists
-for different sampling strategies (random, bootstrap, disjoint). See the class API
-for details and examples.
+The helper `_generate_subsample_indices()` produces integer index lists that are
+used by the Monte Carlo routines to build subsamples from the original dataset.
+Below is a concise, practical explanation of the three supported strategies and
+how to choose between them.
+
+- random (without replacement)
+  - What: Each subsample contains `size` unique indices drawn randomly from the
+    original dataset (no duplicates inside the same subsample).
+  - Constraint: `size` must be less than or equal to the original sample size
+    `N`.
+  - When to use: Typical default for studying how estimates change with smaller
+    sample sizes. Keeps each subsample representative and avoids internal
+    duplication.
+
+- bootstrap (with replacement)
+  - What: Each subsample is drawn with replacement, so the same original row
+    can appear multiple times in a single subsample.
+  - Constraint: None — `size` may be larger than `N` because indices can repeat.
+  - When to use: Use when you need to estimate uncertainty (variance, CIs) via
+    resampling, or when you want to allow `size` >= `N` for simulation purposes.
+
+- disjoint (non-overlapping partitions)
+  - What: The original indices are shuffled and partitioned into non-overlapping
+    blocks of length `size`. Each block is a subsample with no shared indices.
+  - Constraint: `size` must be <= `N`. The number of blocks per shuffle is
+    `N // size`; for `n_repeats` larger than that, additional shuffles are used.
+  - When to use: Use when you want independent partitions (similar to simple
+    cross-validation) and want to avoid overlap between subsamples within the
+    same shuffle.
+
+Reproducibility and seed
+------------------------
+
+- A random `seed` controls the pseudo-random generator used to create indices.
+  Providing the same seed reproduces the same sequence of subsamples. This is
+  recommended for experiments where results must be repeatable.
+
+Practical guidance
+------------------
+
+- Use `random` as a safe default when `size <= N` and you want unbiased
+  subsamples without duplicates.
+- Use `bootstrap` when you need to estimate uncertainty from resampling or when
+  you want to allow `size >= N`.
+- Use `disjoint` when you need non-overlapping partitions to compare independent
+  fits or to maximize coverage of the original dataset without duplication.
+
+Quick example (intuition): for `N=100, size=25, n_repeats=4`:
+- `random` → 4 independent draws of 25 unique indices (may overlap between
+  draws).
+- `bootstrap` → 4 draws of 25 indices each, some indices may repeat inside a
+  draw.
+- `disjoint` → a single shuffle yields four non-overlapping blocks of 25 indices.
+
+See `_generate_subsample_indices()` source for exact behaviour and edge-case
+handling.

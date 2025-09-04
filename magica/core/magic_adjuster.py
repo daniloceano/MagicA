@@ -544,6 +544,7 @@ class MagicAdjuster:
         sizes: Optional[List[int]] = None,
         n_repeats: int = 20,
         tests: List[str] = ['ks'],
+    stability_method: str = 'aggregate',
     fig_output_path: Optional[str] = None,
         plot_type: str = 'series',
         sampling: str = 'random',
@@ -597,6 +598,11 @@ class MagicAdjuster:
             - fit_kwargs : dict
                 Passed to fit_distribution for parameter constraints (e.g.,
                 fit_kwargs={'floc': 0}).
+            - stability_method : str, default='detect'
+                Which stability detection approach to use:
+                - 'detect' : use internal `_detect_stability_points` on numeric arrays (default)
+                - 'aggregate' : collect per-repeat results and use `_aggregate_and_detect_stability`
+                - 'none' : skip stability detection
 
         Returns
         -------
@@ -747,6 +753,9 @@ class MagicAdjuster:
             ss = np.random.SeedSequence(seed)
             child_seq = ss.spawn(n_sizes)
 
+        # Prepare storage for aggregate-style results if requested
+        aggregate_results = {'results': {int(s): [] for s in sizes}} if stability_method == 'aggregate' else None
+
         # Main Monte Carlo loop
         sizes_iter = tqdm(list(enumerate(sizes)), desc='Monte Carlo sizes')
         for i, size in sizes_iter:
@@ -790,6 +799,10 @@ class MagicAdjuster:
                         if param_idx < max_params:
                             param_arrays[f'param_{param_idx}'][i, rep_j] = param_val
 
+                    # If aggregate collection requested, store per-rep entry
+                    if aggregate_results is not None:
+                        rep_entry = {'params': params, 'gof': {}}
+
                     # Run goodness-of-fit tests
                     for test in test_list:
                         try:
@@ -797,16 +810,24 @@ class MagicAdjuster:
                                 ks_res = adj.goodness_of_fit('ks')
                                 test_arrays['ks_statistic'][i, rep_j] = ks_res.get('statistic', ks_res.get('ks_statistic', np.nan))
                                 test_arrays['ks_pvalue'][i, rep_j] = ks_res.get('p_value', np.nan)
+                                if aggregate_results is not None:
+                                    rep_entry['gof']['ks'] = ks_res
                             elif test == 'chi2':
                                 chi_res = adj.goodness_of_fit('chi2', bins=bins, warn_on_normalization=False)
                                 test_arrays['chi2_statistic'][i, rep_j] = chi_res.get('statistic', chi_res.get('chi2_statistic', np.nan))
                                 test_arrays['chi2_pvalue'][i, rep_j] = chi_res.get('p_value', np.nan)
+                                if aggregate_results is not None:
+                                    rep_entry['gof']['chi2'] = chi_res
                             elif test == 'rmse':
-                                rmse_res = adj.goodness_of_fit('rmse')
-                                test_arrays['rmse'][i, rep_j] = rmse_res.get('rmse', np.nan)
+                                test_arrays['rmse'][i, rep_j] = adj.goodness_of_fit('rmse')
+                                if aggregate_results is not None:
+                                    rep_entry['gof']['rmse'] = test_arrays['rmse'][i, rep_j]
                         except Exception:
                             # Values remain NaN for failed tests
                             pass
+
+                    if aggregate_results is not None:
+                        aggregate_results['results'][int(size)].append(rep_entry)
 
                 except Exception:
                     # Values remain NaN for failed fits
@@ -823,7 +844,23 @@ class MagicAdjuster:
         }
 
         # Detect stability points
-        stability_points = self._detect_stability_points(data_vars, sizes)
+        stability_points = None
+        agg_summary = None
+        if stability_method == 'detect':
+            stability_points = self._detect_stability_points(data_vars, sizes)
+        elif stability_method == 'aggregate' and aggregate_results is not None:
+            agg_summary, _, _ = self._aggregate_and_detect_stability(aggregate_results, sizes, test_list, max_params)
+            # Convert agg_summary to stability_points format used by plotting
+            stability_points = {}
+            # Tests
+            for test in agg_summary.get('tests', {}):
+                inf_idx = agg_summary['tests'][test].get('inflection_index')
+                stability_points[test] = {'size': int(sizes[inf_idx]) if inf_idx is not None else None, 'index': int(inf_idx) if inf_idx is not None else None, 'cv_at_stability': None}
+            # Params (use params inflection)
+            p_inf_idx = agg_summary['params'].get('inflection_index')
+            stability_points['param_0'] = {'size': int(sizes[p_inf_idx]) if p_inf_idx is not None else None, 'index': int(p_inf_idx) if p_inf_idx is not None else None, 'cv_at_stability': None}
+        else:
+            stability_points = {k: {'size': None, 'index': None, 'cv_at_stability': None} for k in list(param_arrays.keys()) + list(test_arrays.keys())}
 
         # Optionally create & save figure
         figure_path = None
@@ -904,224 +941,12 @@ class MagicAdjuster:
         
         return stability_points
 
-    def _create_monte_carlo_figure(
-        self,
-        data_vars: Dict[str, np.ndarray],
-        sizes: np.ndarray,
-        plot_type: str,
-        stability_points: Optional[Dict[str, Dict[str, Any]]] = None,
-    ):
-        """Create 2x3 summary figure (row 1: parameters, row 2: test p-values/statistics).
-
-        Draws a vertical dashed red line at the stability sample size for each
-        variable if available in stability_points.
-        """
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:  # pragma: no cover
-            return None
-
-        # Select up to first 3 parameter variables
-        param_names = sorted([k for k in data_vars if k.startswith('param_')])[:3]
-        if not param_names:
-            return None  # Nothing meaningful to show
-
-        # Preferred order for test panels (only keep those present)
-        preferred_tests = ["ks_pvalue", "chi2_pvalue", "rmse"]
-        test_names = [t for t in preferred_tests if t in data_vars][:3]
-
-        # Always build a 2x3 grid; hide unused axes
-        fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
-        axes_flat = axes.ravel()
-
-        def _panel(ax, data: np.ndarray, title: str, var_name: str):
-            if plot_type == 'boxplots':
-                box_data = [data[i, ~np.isnan(data[i, :])] for i in range(len(sizes))]
-                if len(sizes) > 1:
-                    width = max(1, (sizes[1] - sizes[0]) * 0.6)
-                else:
-                    width = 5
-                ax.boxplot(box_data, positions=sizes, widths=width)
-            else:  # series
-                med = np.nanmedian(data, axis=1)
-                q25 = np.nanpercentile(data, 25, axis=1)
-                q75 = np.nanpercentile(data, 75, axis=1)
-                ax.plot(sizes, med, 'o-', lw=1.4, label='Median')
-                ax.fill_between(sizes, q25, q75, alpha=0.25, label='IQR')
-                ax.legend(frameon=False, fontsize=8)
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
-            # Stability vertical line if exists
-            if stability_points:
-                sp = stability_points.get(var_name)
-                if sp and sp.get('size') is not None:
-                    try:
-                        ax.axvline(sp['size'], color='red', linestyle='--', linewidth=1, alpha=0.85)
-                    except Exception:
-                        pass
-
-        # Parameter panels (row 0)
-        for col, pname in enumerate(param_names):
-            ax = axes[0, col]
-            _panel(ax, data_vars[pname], pname.replace('_', ' ').title(), pname)
-            ax.set_ylabel('Value')
-        # Hide unused param axes in row 0
-        for col in range(len(param_names), 3):
-            axes[0, col].axis('off')
-
-        # Test panels (row 1)
-        for col, tname in enumerate(test_names):
-            ax = axes[1, col]
-            label = tname.replace('_', ' ').title()
-            _panel(ax, data_vars[tname], label, tname)
-            ax.set_xlabel('Sample Size')
-            if col == 0:
-                ax.set_ylabel('Value')
-        for col in range(len(test_names), 3):
-            axes[1, col].axis('off')
-
-        # Shared formatting
-        for ax in axes_flat:
-            if ax.has_data():
-                ax.tick_params(axis='x', rotation=0)
-
-        fig.suptitle('Monte Carlo Stability Summary', fontsize=14)
-        fig.tight_layout(rect=(0, 0, 1, 0.97))
-        return fig
-
-    def _make_boxplots_figure(
-        self,
-        sizes: np.ndarray,
-        summary: Dict[str, Any],
-        param_values_per_size: Dict[int, List[List[float]]],
-        test_list: List[str],
-        max_params: int,
-    ):
-        """
-        Build and return a matplotlib Figure with boxplots for the chosen test and
-        up to the first three fitted parameters. Returns None on failure or when
-        matplotlib is not available.
-
-        Parameters
-        ----------
-        sizes
-            Array-like of sample sizes used as x-axis labels.
-        summary
-            The summary dict generated by monte_carlo_fit (contains 'tests').
-        param_values_per_size
-            Mapping param_index -> list-of-lists of values per sample size.
-        test_list
-            List of test names (e.g. ['chi2', 'ks']). The first entry is used for
-            the primary boxplot.
-        max_params
-            Maximum number of parameters discovered during fitting.
-
-        Returns
-        -------
-        matplotlib.figure.Figure or None
-        """
-        try:
-            import matplotlib.pyplot as plt
-        except Exception:
-            return None
-
-        try:
-            n_param_plots = min(3, max_params)
-
-            # main figure: p-values / metric boxplots
-            fig_main, ax_main = plt.subplots(1, 1, figsize=(10, 4), constrained_layout=True)
-            bp_data = summary['tests'][test_list[0]]['values_per_size']
-            ax_main.boxplot(bp_data, labels=[str(s) for s in sizes], showfliers=False)
-            ax_main.set_title(f"CPS boxplot for {test_list[0]}")
-            ax_main.set_xlabel('sample size')
-            ax_main.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
-
-            fig_params = None
-            if n_param_plots > 0:
-                fig_params, axes = plt.subplots(n_param_plots, 1, figsize=(10, 3 * n_param_plots), constrained_layout=True)
-                if n_param_plots == 1:
-                    axes = [axes]
-                for pi in range(n_param_plots):
-                    ax = axes[pi]
-                    pdata = param_values_per_size.get(pi, [])
-                    ax.boxplot(pdata, labels=[str(s) for s in sizes], showfliers=False)
-                    ax.set_title(f'Parameter {pi} distribution across sample sizes')
-                    ax.set_xlabel('sample size')
-                    ax.set_ylabel(f'param_{pi}')
-
-            return fig_main, fig_params
-        except Exception:
-            return None, None
-
-    def _make_series_figure(
-        self,
-        sizes: np.ndarray,
-        summary: Dict[str, Any],
-        param_values_per_size: Dict[int, List[List[float]]],
-        test_list: List[str],
-        max_params: int,
-    ):
-        """
-        Build and return a matplotlib Figure showing a series (line) for the chosen
-        test medians across sample sizes, with shaded area showing dispersion (e.g.
-        25-75 percentile). Also plots medians for up to three parameters with shaded
-        dispersion. Returns None on failure or when matplotlib is not available.
-        """
-        try:
-            import matplotlib.pyplot as plt
-        except Exception:
-            return None
-
-        try:
-            fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
-
-            # Prepare test median and quartiles
-            vals = summary['tests'][test_list[0]]['values_per_size']
-            medians = [np.median(v) if len(v) > 0 else np.nan for v in vals]
-            q1 = [np.percentile(v, 25) if len(v) > 0 else np.nan for v in vals]
-            q3 = [np.percentile(v, 75) if len(v) > 0 else np.nan for v in vals]
-
-            x = np.arange(len(sizes))
-            ax.plot(x, medians, marker='o', label=f'{test_list[0]} median')
-            ax.fill_between(x, q1, q3, alpha=0.3, label=f'{test_list[0]} 25-75%')
-            ax.set_xticks(x)
-            ax.set_xticklabels([str(s) for s in sizes], rotation=45)
-            ax.set_xlabel('sample size')
-            ax.set_ylabel('p-value' if test_list[0] in ['chi2', 'ks'] else test_list[0])
-            ax.set_title(f'Stability series for {test_list[0]}')
-            ax.legend()
-
-            # parameter series (up to 3)
-            n_param_plots = min(3, max_params)
-            fig_params = None
-            if n_param_plots > 0:
-                fig_params, axes = plt.subplots(n_param_plots, 1, figsize=(10, 3 * n_param_plots), constrained_layout=True)
-                if n_param_plots == 1:
-                    axes = [axes]
-                for pi in range(n_param_plots):
-                    pdata = param_values_per_size.get(pi, [])
-                    meds = [np.median(v) if len(v) > 0 else np.nan for v in pdata]
-                    q1p = [np.percentile(v, 25) if len(v) > 0 else np.nan for v in pdata]
-                    q3p = [np.percentile(v, 75) if len(v) > 0 else np.nan for v in pdata]
-                    axp = axes[pi]
-                    axp.plot(x, meds, marker='o', label=f'param_{pi} median')
-                    axp.fill_between(x, q1p, q3p, alpha=0.25, label='25-75%')
-                    axp.set_xticks(x)
-                    axp.set_xticklabels([str(s) for s in sizes], rotation=45)
-                    axp.set_xlabel('sample size')
-                    axp.set_ylabel(f'param_{pi}')
-                    axp.legend()
-
-            return fig, fig_params
-        except Exception:
-            return None
-
     def _aggregate_and_detect_stability(
         self,
         results: Dict[str, Any],
         sizes: np.ndarray,
-        test_list: List[str],
-        max_params: int,
+        test_list: Optional[List[str]] = None,
+        max_params: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], Dict[int, List[List[float]]], Dict[int, List[float]]]:
         """
         Aggregate monte carlo `results` and detect stability (CPS) for tests and parameters.
@@ -1129,6 +954,31 @@ class MagicAdjuster:
         Returns (summary, param_values_per_size, param_medians)
         """
         summary: Dict[str, Any] = {'sizes': sizes.tolist(), 'tests': {}, 'params': {}}
+
+        # If test_list not provided, infer from first non-empty rep
+        if test_list is None:
+            inferred = set()
+            for size in sizes:
+                reps = results.get('results', {}).get(int(size), [])
+                if len(reps) > 0:
+                    for rep in reps:
+                        gof = rep.get('gof', {})
+                        inferred.update(gof.keys())
+                    break
+            test_list = sorted(list(inferred)) if inferred else []
+
+        # If max_params not provided, infer from first available params
+        if max_params is None:
+            inferred_max = 0
+            for size in sizes:
+                reps = results.get('results', {}).get(int(size), [])
+                for rep in reps:
+                    params = rep.get('params')
+                    if params is not None:
+                        inferred_max = max(inferred_max, len(params))
+                if inferred_max > 0:
+                    break
+            max_params = int(inferred_max)
 
         # For each test, compute list of p-values (or metric) per size
         for test in test_list:
@@ -1161,8 +1011,8 @@ class MagicAdjuster:
             medians = np.array([np.median(v) if len(v) > 0 else np.nan for v in values_per_size])
 
             # detect inflection / stability: look for first index where moving window is stable
-            tol = 0.01
-            window = 3
+            tol = 0.1
+            window = 4
             inflection_idx = None
             if medians.size >= window:
                 for j in range(0, len(medians) - window + 1):
@@ -1221,26 +1071,106 @@ class MagicAdjuster:
             summary['params']['inflection_size'] = None
 
         return summary, param_values_per_size, param_medians
-        
+    
 
+    def _create_monte_carlo_figure(
+        self,
+        data_vars: Dict[str, np.ndarray],
+        sizes: np.ndarray,
+        plot_type: str,
+        stability_points: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
+        """Create 2x3 summary figure (row 1: parameters, row 2: test p-values/statistics).
+
+        Draws a vertical dashed red line at the stability sample size for each
+        variable if available in stability_points.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:  # pragma: no cover
+            return None
+
+        # Select up to first 3 parameter variables
+        param_names = sorted([k for k in data_vars if k.startswith('param_')])[:3]
+        if not param_names:
+            return None  # Nothing meaningful to show
+
+        # Preferred order for test panels (only keep those present)
+        preferred_tests = ["ks_pvalue", "chi2_pvalue", "rmse"]
+        test_names = [t for t in preferred_tests if t in data_vars][:3]
+
+        # Always build a 2x3 grid; hide unused axes
+        fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
+        axes_flat = axes.ravel()
+
+        def _panel(ax, data: np.ndarray, title: str, var_name: str):
+            if plot_type == 'boxplots':
+                box_data = [data[i, ~np.isnan(data[i, :])] for i in range(len(sizes))]
+                if len(sizes) > 1:
+                    width = max(1, (sizes[1] - sizes[0]) * 0.6)
+                else:
+                    width = 5
+                ax.boxplot(box_data, positions=sizes, widths=width)
+            else:  # series
+                med = np.nanmedian(data, axis=1)
+                q25 = np.nanpercentile(data, 25, axis=1)
+                q75 = np.nanpercentile(data, 75, axis=1)
+                ax.plot(sizes, med, 'o-', lw=1.4, label='Median')
+                ax.fill_between(sizes, q25, q75, alpha=0.25, label='IQR')
+                ax.legend(frameon=False, fontsize=8)
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+            # Stability vertical line if exists
+            if stability_points:
+                sp = stability_points.get(var_name)
+                if sp and sp.get('size') is not None:
+                    try:
+                        ax.axvline(sp['size'], color='red', linestyle='--', linewidth=1, alpha=0.85)
+                    except Exception:
+                        pass
+
+            # Draw horizontal alpha threshold for p-value panels (KS / Chi2)
+            if var_name in ('ks_pvalue', 'chi2_pvalue'):
+                try:
+                    ax.axhline(0.05, color='red', linestyle='--', linewidth=1, alpha=0.9)
+                except Exception:
+                    pass
+
+        # Parameter panels (row 0)
+        for col, pname in enumerate(param_names):
+            ax = axes[0, col]
+            _panel(ax, data_vars[pname], pname.replace('_', ' ').title(), pname)
+            ax.set_ylabel('Value')
+        # Hide unused param axes in row 0
+        for col in range(len(param_names), 3):
+            axes[0, col].axis('off')
+
+        # Test panels (row 1)
+        for col, tname in enumerate(test_names):
+            ax = axes[1, col]
+            label = tname.replace('_', ' ').title()
+            _panel(ax, data_vars[tname], label, tname)
+            ax.set_xlabel('Sample Size')
+            if col == 0:
+                ax.set_ylabel('Value')
+            # Ensure p-value/statistic panels start at 0 on y-axis
+            try:
+                ax.set_ylim(bottom=0)
+            except Exception:
+                pass
+        for col in range(len(test_names), 3):
+            axes[1, col].axis('off')
+
+        # Shared formatting
+        for ax in axes_flat:
+            if ax.has_data():
+                ax.tick_params(axis='x', rotation=0)
+
+        fig.suptitle('Monte Carlo Stability Summary', fontsize=14)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        return fig
 
 ## TO-DO:
-    def _detect_stability(self, results: Dict[str, Any], sizes: np.ndarray) -> Dict[str, Any]:
-        """Detect stability in Monte Carlo results using moving window approach."""
-        # Simple implementation - can be enhanced later
-        return {
-            'stable_size': None,
-            'window_size': 3,
-            'tolerance': 0.1,
-            'is_stable': False
-        }
-    
-    def _create_stability_plot(self, results: Dict[str, Any]) -> tuple:
-        """Create stability plots for Monte Carlo results."""
-        # Simple implementation returning None figures - can be enhanced later
-        return (None, None)
-
-
 # When set a new distribution to an already used variable, it will override the distribution form previous variable
 # For example:
 # fitted_data_weibull = data.fit_distribution('weibull')
