@@ -67,6 +67,7 @@ Contents
    :caption: API Reference
 
    api/core
+   api/monte_carlo
 
 .. toctree::
    :maxdepth: 1
