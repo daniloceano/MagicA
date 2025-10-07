@@ -6,11 +6,12 @@ The `core` module contains the main classes that power MagicA's statistical anal
 
 ## 📋 Quick Overview
 
-This module has two main classes that work together:
+This module has three main classes that work together:
 - **`DataProcessor`**: Handles data loading, cleaning, and basic statistics
 - **`MagicAdjuster`**: Performs advanced statistical distribution fitting
+- **`AutoFitter`**: Automatically tests multiple distributions and selects the best fit
 
-The clever part? You only need to work with `DataProcessor` - it automatically creates and manages the `MagicAdjuster` when needed!
+The clever part? You only need to work with `DataProcessor` - it automatically creates and manages the other classes when needed!
 
 ## 🏗️ The Architecture: How They Work Together
 
@@ -239,7 +240,147 @@ print(f"Best distribution: {best_dist} (AIC: {results[best_dist]:.2f})")
 4. **Reliability**: Error handling and state management are built-in
 5. **Performance**: Memory and computation are optimized automatically
 
-This architecture follows the principle: **"Simple things should be simple, complex things should be possible"**. Basic operations are straightforward, but advanced statistical analysis is available when you need it!
+## 🤖 Automatic Distribution Fitting with AutoFitter
+
+### The New Challenge: Model Selection
+
+While `MagicAdjuster` excels at fitting a specific distribution, real-world data analysis often requires testing multiple distributions to find the best fit. This is where `AutoFitter` comes in.
+
+### AutoFitter Architecture: Smart Model Selection
+
+**Problem**: Testing multiple distributions manually:
+```python
+# Manual approach (tedious)
+processor = ma.read_data(data)
+processor.fit_distribution('weibull')
+weibull_rmse = processor.goodness_of_fit('rmse')
+
+processor.fit_distribution('gamma') 
+gamma_rmse = processor.goodness_of_fit('rmse')
+
+processor.fit_distribution('lognorm')
+lognorm_rmse = processor.goodness_of_fit('rmse')
+# ... and compare manually
+```
+
+**Solution**: Automatic testing and selection:
+```python
+# AutoFitter approach (elegant)
+processor = ma.read_data(data)
+auto_fitter = processor.get_auto_fitter()
+best_result = auto_fitter.fit_best_distribution()
+print(f"Best distribution: {best_result['distribution']}")
+```
+
+### Lazy Initialization in AutoFitter
+
+`AutoFitter` uses advanced lazy initialization - it creates separate `MagicAdjuster` instances only when testing each distribution:
+
+```python
+class AutoFitter:
+    def __init__(self, data_processor, candidates=None):
+        # Placeholders created, but NO MagicAdjuster instances yet!
+        self._adjusters = {dist: None for dist in self.candidates}
+    
+    def _get_adjuster(self, distribution):
+        # Factory method - creates adjuster only when first needed
+        if self._adjusters[distribution] is None:
+            temp_processor = DataProcessor()
+            temp_processor.data = self.data_processor.data.copy()
+            self._adjusters[distribution] = MagicAdjuster(temp_processor)
+        return self._adjusters[distribution]
+```
+
+### Memory Efficiency Benefits
+
+| Operation | Memory Usage | MagicAdjuster Instances |
+|-----------|--------------|-------------------------|
+| `get_auto_fitter()` | Base + placeholders | 0 created |
+| `fit_single_distribution('weibull')` | Base + 1 adjuster | 1 created |
+| `fit_all_distributions()` | Base + N adjusters | N created (as needed) |
+
+### Complete AutoFitter Example
+
+```python
+import magica as ma
+import numpy as np
+
+# Generate complex wind speed data
+wind_data = np.concatenate([
+    np.random.weibull(2, 500) * 8 + 2,    # Low wind period
+    np.random.lognormal(2, 0.5, 300),     # Variable wind period  
+    np.random.gamma(3, 2, 200)            # High wind period
+])
+
+# Load data
+processor = ma.read_data(wind_data)
+
+# Show all available distributions (113 total!)
+from magica.core.auto_fitter import AutoFitter
+all_distributions = AutoFitter.get_all_available_distributions()
+print(f"Available distributions: {len(all_distributions)}")
+print(f"First 10: {all_distributions[:10]}")
+
+# Option 1: Use curated stable distributions (default - 16 distributions)
+auto_fitter = processor.get_auto_fitter(criterion='rmse')
+best_result = auto_fitter.fit_best_distribution()
+print(f"Best: {best_result['distribution']} (RMSE: {best_result['rmse']:.4f})")
+
+# Option 2: Use ALL 113 distributions (takes longer but comprehensive)
+auto_fitter_all = processor.get_auto_fitter(
+    candidates=all_distributions,  # All 113 distributions!
+    criterion='rmse'
+)
+best_comprehensive = auto_fitter_all.fit_best_distribution()
+
+# Option 3: Custom subset for your specific domain
+wind_specific = ['weibull_min', 'lognorm', 'gamma', 'rayleigh', 'chi2']
+auto_fitter_wind = processor.get_auto_fitter(
+    candidates=wind_specific,
+    criterion='rmse'
+)
+
+# Get comprehensive comparison
+all_results = auto_fitter.get_comparison_table(sort_by='rmse')
+for i, (dist, result) in enumerate(list(all_results.items())[:5]):
+    if result['success']:
+        print(f"{i+1}. {dist}: RMSE={result['rmse']:.4f}, AIC={result['aic']:.2f}")
+
+# Use the best-fitted distribution directly
+best_adjuster = auto_fitter.get_best_adjuster()
+percentile_95 = best_adjuster.ppf(0.95)
+print(f"95th percentile wind speed: {percentile_95:.2f} m/s")
+```
+
+### Available Distributions
+
+**AutoFitter supports all 113 SciPy continuous distributions**, including:
+
+- **Common**: weibull_min, lognorm, gamma, norm, expon, rayleigh, chi2, beta
+- **Specialized**: gumbel_r, pareto, invgamma, maxwell, triang, laplace
+- **Advanced**: genextreme, gengamma, levy_stable, johnsonsu, burr12
+- **Complete list**: Use `AutoFitter.get_all_available_distributions()` to see all
+
+**Default Strategy**: Uses a curated subset of 16 stable, commonly-used distributions to balance comprehensiveness with performance. Override with `candidates=AutoFitter.get_all_available_distributions()` for exhaustive testing.
+
+### Selection Criteria Available
+
+- **`rmse`**: Root Mean Square Error (lower is better) - **Default**
+- **`aic`**: Akaike Information Criterion (lower is better)
+- **`bic`**: Bayesian Information Criterion (lower is better)
+- **`ks_pvalue`**: Kolmogorov-Smirnov p-value (higher is better)
+- **`chi2_pvalue`**: Chi-square p-value (higher is better)
+
+### Integration with Existing Architecture
+
+`AutoFitter` seamlessly integrates with the existing factory pattern:
+
+1. **DataProcessor** creates `AutoFitter` via `get_auto_fitter()`
+2. **AutoFitter** creates multiple `MagicAdjuster` instances as needed
+3. **MagicAdjuster** instances handle individual distribution fitting
+4. **AutoFitter** compares results and selects the best fit
+
+This three-tier architecture maintains the principle: **"Simple things should be simple, complex things should be possible"**. Basic operations remain straightforward, manual distribution fitting is available when needed, and automatic model selection is there for complex analysis!
 
 ## 🔄 The Method Interceptor: Making SciPy Methods Accessible
 

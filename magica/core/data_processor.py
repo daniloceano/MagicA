@@ -182,6 +182,49 @@ class DataProcessor:
         
         return self._adjuster.get_distribution_info()
     
+    def get_auto_fitter(self, candidates=None, criterion='rmse'):
+        """
+        Create an AutoFitter instance for automatic distribution selection.
+        
+        This method follows the factory pattern - it creates an AutoFitter
+        instance when needed, allowing automatic testing of multiple distributions
+        to find the best fit based on specified criteria.
+        
+        Parameters
+        ----------
+        candidates : list of str, optional
+            List of distribution names to test. If None, uses default set including:
+            'weibull_min', 'lognorm', 'gamma', 'norm', 'expon', 'rayleigh', 'chi2', 'beta'
+        criterion : str, default 'rmse'
+            Selection criterion ('rmse', 'aic', 'bic', 'ks_pvalue', 'chi2_pvalue')
+            
+        Returns
+        -------
+        AutoFitter
+            AutoFitter instance configured with this data
+            
+        Examples
+        --------
+        >>> import magica as ma
+        >>> import numpy as np
+        >>> 
+        >>> # Load data
+        >>> data = np.random.weibull(2, 1000)
+        >>> processor = ma.read_data(data)
+        >>> 
+        >>> # Get auto fitter and find best distribution
+        >>> auto_fitter = processor.get_auto_fitter()
+        >>> best_result = auto_fitter.fit_best_distribution()
+        >>> print(f"Best distribution: {best_result['distribution']}")
+        """
+        # Import here to avoid circular imports
+        from .auto_fitter import AutoFitter
+        
+        if self.data is None:
+            raise ValueError("No data has been loaded.")
+            
+        return AutoFitter(self, candidates=candidates, criterion=criterion)
+    
     def _update_metadata(self):
         """Update data metadata."""
         if self.data is not None:

@@ -13,6 +13,133 @@ from tqdm import tqdm, trange
 from .data_processor import DataProcessor
 
 
+def get_available_distributions():
+    """
+    Get all available distribution names and their scipy.stats objects.
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping distribution names to scipy.stats objects
+    """
+    return {
+        # Complete and validated mapping of scipy.stats continuous distributions
+        'alpha': stats.alpha,
+        'anglit': stats.anglit,
+        'arcsine': stats.arcsine,
+        'argus': stats.argus,
+        'beta': stats.beta,
+        'betaprime': stats.betaprime,
+        'bradford': stats.bradford,
+        'burr': stats.burr,
+        'burr12': stats.burr12,
+        'cauchy': stats.cauchy,
+        'chi': stats.chi,
+        'chi2': stats.chi2,
+        'cosine': stats.cosine,
+        'crystalball': stats.crystalball,
+        'dgamma': stats.dgamma,
+        'dpareto_lognorm': stats.dpareto_lognorm,
+        'dweibull': stats.dweibull,
+        'erlang': stats.erlang,
+        'expon': stats.expon,
+        'exponnorm': stats.exponnorm,
+        'exponpow': stats.exponpow,
+        'exponweib': stats.exponweib,
+        'f': stats.f,
+        'fatiguelife': stats.fatiguelife,
+        'fisk': stats.fisk,
+        'foldcauchy': stats.foldcauchy,
+        'foldnorm': stats.foldnorm,
+        'gamma': stats.gamma,
+        'gausshyper': stats.gausshyper,
+        'genexpon': stats.genexpon,
+        'genextreme': stats.genextreme,
+        'gengamma': stats.gengamma,
+        'genhalflogistic': stats.genhalflogistic,
+        'genhyperbolic': stats.genhyperbolic,
+        'geninvgauss': stats.geninvgauss,
+        'genlogistic': stats.genlogistic,
+        'gennorm': stats.gennorm,
+        'genpareto': stats.genpareto,
+        'gibrat': stats.gibrat,
+        'gompertz': stats.gompertz,
+        'gumbel_l': stats.gumbel_l,
+        'gumbel_r': stats.gumbel_r,
+        'halfcauchy': stats.halfcauchy,
+        'halfgennorm': stats.halfgennorm,
+        'halflogistic': stats.halflogistic,
+        'halfnorm': stats.halfnorm,
+        'hypsecant': stats.hypsecant,
+        'invgamma': stats.invgamma,
+        'invgauss': stats.invgauss,
+        'invweibull': stats.invweibull,
+        'irwinhall': stats.irwinhall,
+        'jf_skew_t': stats.jf_skew_t,
+        'johnsonsb': stats.johnsonsb,
+        'johnsonsu': stats.johnsonsu,
+        'kappa3': stats.kappa3,
+        'kappa4': stats.kappa4,
+        'ksone': stats.ksone,
+        'kstwo': stats.kstwo,
+        'kstwobign': stats.kstwobign,
+        'landau': stats.landau,
+        'laplace': stats.laplace,
+        'laplace_asymmetric': stats.laplace_asymmetric,
+        'levy': stats.levy,
+        'levy_l': stats.levy_l,
+        'levy_stable': stats.levy_stable,
+        'loggamma': stats.loggamma,
+        'logistic': stats.logistic,
+        'loglaplace': stats.loglaplace,
+        'lognorm': stats.lognorm,
+        'loguniform': stats.loguniform,
+        'lomax': stats.lomax,
+        'maxwell': stats.maxwell,
+        'mielke': stats.mielke,
+        'moyal': stats.moyal,
+        'nakagami': stats.nakagami,
+        'ncf': stats.ncf,
+        'nct': stats.nct,
+        'ncx2': stats.ncx2,
+        'norm': stats.norm,
+        'norminvgauss': stats.norminvgauss,
+        'pareto': stats.pareto,
+        'pearson3': stats.pearson3,
+        'powerlaw': stats.powerlaw,
+        'powerlognorm': stats.powerlognorm,
+        'powernorm': stats.powernorm,
+        'rayleigh': stats.rayleigh,
+        'rdist': stats.rdist,
+        'recipinvgauss': stats.recipinvgauss,
+        'reciprocal': stats.reciprocal,
+        'rel_breitwigner': stats.rel_breitwigner,
+        'rice': stats.rice,
+        'semicircular': stats.semicircular,
+        'skewcauchy': stats.skewcauchy,
+        'skewnorm': stats.skewnorm,
+        'studentized_range': stats.studentized_range,
+        'students_t': stats.t,  # More descriptive name for t-distribution
+        't': stats.t,  # Also support direct 't' name
+        'trapezoid': stats.trapezoid,
+        'trapz': stats.trapezoid,  # Common alias
+        'triang': stats.triang,
+        'truncexpon': stats.truncexpon,
+        'truncnorm': stats.truncnorm,
+        'truncpareto': stats.truncpareto,
+        'truncweibull_min': stats.truncweibull_min,
+        'tukeylambda': stats.tukeylambda,
+        'uniform': stats.uniform,
+        'vonmises': stats.vonmises,
+        'vonmises_line': stats.vonmises_line,
+        'wald': stats.wald,
+        'weibull': stats.weibull_min,  # Common alias for Weibull
+        'weibull_max': stats.weibull_max,
+        'weibull_min': stats.weibull_min,
+        'wrapcauchy': stats.wrapcauchy
+    }
+
+
 class MagicAdjuster:
     """
     Simple class for statistical distribution fitting using SciPy.
@@ -59,122 +186,7 @@ class MagicAdjuster:
         """
         # Handle string distribution names
         if isinstance(distribution, str):
-            distribution_map = {
-                # Complete and validated mapping of scipy.stats continuous distributions
-                'alpha': stats.alpha,
-                'anglit': stats.anglit,
-                'arcsine': stats.arcsine,
-                'argus': stats.argus,
-                'beta': stats.beta,
-                'betaprime': stats.betaprime,
-                'bradford': stats.bradford,
-                'burr': stats.burr,
-                'burr12': stats.burr12,
-                'cauchy': stats.cauchy,
-                'chi': stats.chi,
-                'chi2': stats.chi2,
-                'cosine': stats.cosine,
-                'crystalball': stats.crystalball,
-                'dgamma': stats.dgamma,
-                'dpareto_lognorm': stats.dpareto_lognorm,
-                'dweibull': stats.dweibull,
-                'erlang': stats.erlang,
-                'expon': stats.expon,
-                'exponnorm': stats.exponnorm,
-                'exponpow': stats.exponpow,
-                'exponweib': stats.exponweib,
-                'f': stats.f,
-                'fatiguelife': stats.fatiguelife,
-                'fisk': stats.fisk,
-                'foldcauchy': stats.foldcauchy,
-                'foldnorm': stats.foldnorm,
-                'gamma': stats.gamma,
-                'gausshyper': stats.gausshyper,
-                'genexpon': stats.genexpon,
-                'genextreme': stats.genextreme,
-                'gengamma': stats.gengamma,
-                'genhalflogistic': stats.genhalflogistic,
-                'genhyperbolic': stats.genhyperbolic,
-                'geninvgauss': stats.geninvgauss,
-                'genlogistic': stats.genlogistic,
-                'gennorm': stats.gennorm,
-                'genpareto': stats.genpareto,
-                'gibrat': stats.gibrat,
-                'gompertz': stats.gompertz,
-                'gumbel_l': stats.gumbel_l,
-                'gumbel_r': stats.gumbel_r,
-                'halfcauchy': stats.halfcauchy,
-                'halfgennorm': stats.halfgennorm,
-                'halflogistic': stats.halflogistic,
-                'halfnorm': stats.halfnorm,
-                'hypsecant': stats.hypsecant,
-                'invgamma': stats.invgamma,
-                'invgauss': stats.invgauss,
-                'invweibull': stats.invweibull,
-                'irwinhall': stats.irwinhall,
-                'jf_skew_t': stats.jf_skew_t,
-                'johnsonsb': stats.johnsonsb,
-                'johnsonsu': stats.johnsonsu,
-                'kappa3': stats.kappa3,
-                'kappa4': stats.kappa4,
-                'ksone': stats.ksone,
-                'kstwo': stats.kstwo,
-                'kstwobign': stats.kstwobign,
-                'landau': stats.landau,
-                'laplace': stats.laplace,
-                'laplace_asymmetric': stats.laplace_asymmetric,
-                'levy': stats.levy,
-                'levy_l': stats.levy_l,
-                'levy_stable': stats.levy_stable,
-                'loggamma': stats.loggamma,
-                'logistic': stats.logistic,
-                'loglaplace': stats.loglaplace,
-                'lognorm': stats.lognorm,
-                'loguniform': stats.loguniform,
-                'lomax': stats.lomax,
-                'maxwell': stats.maxwell,
-                'mielke': stats.mielke,
-                'moyal': stats.moyal,
-                'nakagami': stats.nakagami,
-                'ncf': stats.ncf,
-                'nct': stats.nct,
-                'ncx2': stats.ncx2,
-                'norm': stats.norm,
-                'norminvgauss': stats.norminvgauss,
-                'pareto': stats.pareto,
-                'pearson3': stats.pearson3,
-                'powerlaw': stats.powerlaw,
-                'powerlognorm': stats.powerlognorm,
-                'powernorm': stats.powernorm,
-                'rayleigh': stats.rayleigh,
-                'rdist': stats.rdist,
-                'recipinvgauss': stats.recipinvgauss,
-                'reciprocal': stats.reciprocal,
-                'rel_breitwigner': stats.rel_breitwigner,
-                'rice': stats.rice,
-                'semicircular': stats.semicircular,
-                'skewcauchy': stats.skewcauchy,
-                'skewnorm': stats.skewnorm,
-                'studentized_range': stats.studentized_range,
-                'students_t': stats.t,  # More descriptive name for t-distribution
-                't': stats.t,  # Also support direct 't' name
-                'trapezoid': stats.trapezoid,
-                'trapz': stats.trapezoid,  # Common alias
-                'triang': stats.triang,
-                'truncexpon': stats.truncexpon,
-                'truncnorm': stats.truncnorm,
-                'truncpareto': stats.truncpareto,
-                'truncweibull_min': stats.truncweibull_min,
-                'tukeylambda': stats.tukeylambda,
-                'uniform': stats.uniform,
-                'vonmises': stats.vonmises,
-                'vonmises_line': stats.vonmises_line,
-                'wald': stats.wald,
-                'weibull': stats.weibull_min,  # Common alias for Weibull
-                'weibull_max': stats.weibull_max,
-                'weibull_min': stats.weibull_min,
-                'wrapcauchy': stats.wrapcauchy
-            }
+            distribution_map = get_available_distributions()
             if distribution.lower() not in distribution_map:
                 available = list(distribution_map.keys())
                 raise ValueError(f"Unknown distribution '{distribution}'. Available: {available}")
@@ -230,12 +242,16 @@ class MagicAdjuster:
                 use the original data points. If parameters are not provided,
                 use the fitted parameters.
                 """
-                # If no positional arguments provided, use original data with fitted params
+                # For methods that evaluate at data points, use smart defaults
                 if len(args) == 0 and name in ['pdf', 'cdf', 'sf', 'logpdf', 'logcdf', 'logsf']:
                     return original_method(self.data, *self.fitted_params, **kwargs)
                 # If only data provided (1 arg), add fitted parameters
                 elif len(args) == 1 and name in ['pdf', 'cdf', 'sf', 'logpdf', 'logcdf', 'logsf']:
                     return original_method(args[0], *self.fitted_params, **kwargs)
+                # For ppf, isf, interval - these need explicit input, use frozen distribution
+                elif name in ['ppf', 'isf', 'interval']:
+                    frozen_dist = self.fitted_distribution(*self.fitted_params)
+                    return getattr(frozen_dist, name)(*args, **kwargs)
                 else:
                     # Normal call with all provided arguments
                     return original_method(*args, **kwargs)
@@ -376,13 +392,13 @@ class MagicAdjuster:
         ----------
         bins : int or str, optional 
             The binning method to use. Default is 'doane'.
-                Options:
-                - Integer (e.g., 30): A fixed number of bins.
-                    - 'sturges': Sturges' rule (log-based, best for normal distributions).
-                    - 'freedman-diaconis': Uses Freedman-Diaconis rule (best for skewed distributions).
-                    - 'rice': Uses Rice’s rule (scales with cube root of dataset size).
-                    - 'scott': Uses Scott’s rule (minimizes IMSE for normal distributions).
-                - 'doane': Uses Doane's rule (extension of Sturges' rule that accounts for the skewness of the data distribution).
+            
+            - Integer (e.g., 30): A fixed number of bins.
+            - 'sturges': Sturges' rule (log-based, best for normal distributions).
+            - 'freedman-diaconis': Uses Freedman-Diaconis rule (best for skewed distributions).
+            - 'rice': Uses Rice’s rule (scales with cube root of dataset size).
+            - 'scott': Uses Scott’s rule (minimizes IMSE for normal distributions).
+            - 'doane': Uses Doane's rule (extension of Sturges' rule that accounts for the skewness of the data distribution).
 
         Returns
         -------
@@ -544,8 +560,8 @@ class MagicAdjuster:
         sizes: Optional[List[int]] = None,
         n_repeats: int = 20,
         tests: List[str] = ['ks'],
-    stability_method: str = 'aggregate',
-    fig_output_path: Optional[str] = None,
+        stability_method: str = 'aggregate',
+        fig_output_path: Optional[str] = None,
         plot_type: str = 'series',
         sampling: str = 'random',
         seed: Optional[int] = None,
