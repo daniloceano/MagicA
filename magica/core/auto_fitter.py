@@ -136,67 +136,7 @@ class AutoFitter:
             
         return self._adjusters[distribution]
     
-    def _calculate_rmse(self, adjuster: MagicAdjuster) -> float:
-        """
-        Calculate Root Mean Square Error between empirical and theoretical CDF.
-        
-        Parameters
-        ----------
-        adjuster : MagicAdjuster
-            Fitted adjuster instance
-            
-        Returns
-        -------
-        float
-            RMSE value
-        """
-        try:
-            # Get empirical CDF values
-            sorted_data = np.sort(self.data)
-            empirical_cdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-            
-            # Get theoretical CDF values using the adjuster's CDF method
-            theoretical_cdf = adjuster.cdf(sorted_data)
-            
-            # Calculate RMSE
-            rmse = np.sqrt(np.mean((empirical_cdf - theoretical_cdf) ** 2))
-            return rmse
-            
-        except Exception as e:
-            warnings.warn(f"RMSE calculation failed: {e}")
-            return float('inf')
-    
-    def _calculate_information_criteria(self, adjuster: MagicAdjuster) -> Tuple[float, float]:
-        """
-        Calculate AIC and BIC for the fitted distribution.
-        
-        Parameters
-        ----------
-        adjuster : MagicAdjuster
-            Fitted adjuster instance
-            
-        Returns
-        -------
-        tuple of float
-            (AIC, BIC) values
-        """
-        try:
-            # Get log-likelihood
-            log_likelihood = np.sum(adjuster.logpdf(self.data))
-            
-            # Number of parameters and observations
-            k = len(adjuster.get_fitted_params())
-            n = len(self.data)
-            
-            # Calculate AIC and BIC
-            aic = 2 * k - 2 * log_likelihood
-            bic = k * np.log(n) - 2 * log_likelihood
-            
-            return aic, bic
-            
-        except Exception as e:
-            warnings.warn(f"Information criteria calculation failed: {e}")
-            return float('inf'), float('inf')
+
     
     def fit_single_distribution(self, distribution: str, **fit_kwargs) -> Dict[str, Any]:
         """
@@ -221,11 +161,10 @@ class AutoFitter:
             # Fit the distribution
             adjuster.fit_distribution(distribution, **fit_kwargs)
             
-            # Calculate metrics
-            rmse = self._calculate_rmse(adjuster)
-            aic, bic = self._calculate_information_criteria(adjuster)
-            
-            # Goodness-of-fit tests
+            # Calculate all metrics using the goodness_of_fit method
+            rmse = adjuster.goodness_of_fit('rmse')
+            aic = adjuster.goodness_of_fit('aic')
+            bic = adjuster.goodness_of_fit('bic')
             ks_result = adjuster.goodness_of_fit('ks')
             chi2_result = adjuster.goodness_of_fit('chi2', warn_on_normalization=False)
             
@@ -237,9 +176,9 @@ class AutoFitter:
                 'aic': aic,
                 'bic': bic,
                 'ks_statistic': ks_result.get('ks_statistic', np.nan),
-                'ks_pvalue': ks_result.get('ks_pvalue', np.nan),
+                'ks_pvalue': ks_result.get('p_value', np.nan),
                 'chi2_statistic': chi2_result.get('chi2_statistic', np.nan),
-                'chi2_pvalue': chi2_result.get('chi2_pvalue', np.nan),
+                'chi2_pvalue': chi2_result.get('p_value', np.nan),
                 'success': True,
                 'adjuster': adjuster  # Store reference for later use
             }

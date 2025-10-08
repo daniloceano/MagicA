@@ -426,6 +426,26 @@ class MagicAdjuster:
         return num_bins
 
     def goodness_of_fit(self, method: str, bins: Union[str, int] = 'doane', warn_on_normalization: bool = True):
+        """
+        Perform goodness-of-fit test on the fitted distribution.
+        
+        Parameters
+        ----------
+        method : str
+            Test method: 'chi2', 'ks', 'rmse', 'aic', or 'bic'
+        bins : int or str, default='doane'
+            Binning method for chi2 and rmse tests
+        warn_on_normalization : bool, default=True
+            Whether to warn about frequency normalization in chi2 test
+            
+        Returns
+        -------
+        dict or float
+            Test results (dict for statistical tests, float for RMSE/AIC/BIC)
+        """
+        if self.fitted_distribution is None or self.fitted_params is None:
+            raise ValueError("No distribution has been fitted yet. Call fit_distribution() first.")
+        
         if method.lower() in ['chisquared', 'chi2']:
             n_bins = self.get_num_bins(bins)
             params = self.fitted_params
@@ -469,13 +489,33 @@ class MagicAdjuster:
             }
 
         elif method.lower() in ['root-mean-square-error', 'rmse']:
-            # RMSE
-            n_bins = self.get_num_bins(bins)
-            observed_freq, bin_edges = np.histogram(self.data, bins=n_bins, density=True)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-            estimated_pdf = self.fitted_distribution.pdf(bin_centers, *self.fitted_params)
-            rmse = np.sqrt(np.mean((observed_freq - estimated_pdf) ** 2))
+            # RMSE between empirical and theoretical CDF
+            sorted_data = np.sort(self.data)
+            empirical_cdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
+            theoretical_cdf = self.fitted_distribution.cdf(sorted_data, *self.fitted_params)
+            rmse = np.sqrt(np.mean((empirical_cdf - theoretical_cdf) ** 2))
             return rmse
+        
+        elif method.lower() == 'aic':
+            # Akaike Information Criterion
+            # AIC = 2k - 2ln(L) where k = number of parameters, L = likelihood
+            log_likelihood = np.sum(self.fitted_distribution.logpdf(self.data, *self.fitted_params))
+            k = len(self.fitted_params)
+            aic = 2 * k - 2 * log_likelihood
+            return aic
+        
+        elif method.lower() == 'bic':
+            # Bayesian Information Criterion
+            # BIC = k*ln(n) - 2ln(L) where k = params, n = sample size, L = likelihood
+            log_likelihood = np.sum(self.fitted_distribution.logpdf(self.data, *self.fitted_params))
+            k = len(self.fitted_params)
+            n = len(self.data)
+            bic = k * np.log(n) - 2 * log_likelihood
+            return bic
+        
+        else:
+            raise ValueError(f"Unknown goodness-of-fit method: {method}. "
+                           f"Available: 'chi2', 'ks', 'rmse', 'aic', 'bic'")
 
 
     def _generate_subsample_indices(
