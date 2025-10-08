@@ -227,7 +227,7 @@ class AutoFitter:
             
             # Goodness-of-fit tests
             ks_result = adjuster.goodness_of_fit('ks')
-            chi2_result = adjuster.goodness_of_fit('chi2')
+            chi2_result = adjuster.goodness_of_fit('chi2', warn_on_normalization=False)
             
             # Compile results
             result = {

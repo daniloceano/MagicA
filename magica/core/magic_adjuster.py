@@ -88,7 +88,7 @@ def get_available_distributions():
         'laplace_asymmetric': stats.laplace_asymmetric,
         'levy': stats.levy,
         'levy_l': stats.levy_l,
-        'levy_stable': stats.levy_stable,
+        #'levy_stable': stats.levy_stable,
         'loggamma': stats.loggamma,
         'logistic': stats.logistic,
         'loglaplace': stats.loglaplace,
@@ -118,7 +118,7 @@ def get_available_distributions():
         'semicircular': stats.semicircular,
         'skewcauchy': stats.skewcauchy,
         'skewnorm': stats.skewnorm,
-        'studentized_range': stats.studentized_range,
+        #'studentized_range': stats.studentized_range,
         'students_t': stats.t,  # More descriptive name for t-distribution
         't': stats.t,  # Also support direct 't' name
         'trapezoid': stats.trapezoid,
