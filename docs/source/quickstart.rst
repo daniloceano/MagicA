@@ -23,17 +23,17 @@ Start by fitting a distribution to your data:
 .. code-block:: python
 
     import numpy as np
-    from magica.core import MagicAdjuster
+    import magica as ma
     
     # Generate sample data (Weibull distribution)
     data = np.random.weibull(2, 1000)
     
-    # Create adjuster and fit distribution
-    adjuster = MagicAdjuster(data)
-    adjuster.fit_distribution('weibull_min')
+    # Create processor and fit distribution
+    processor = ma.read_data(data)
+    processor.fit_distribution('weibull_min')
     
     # Get fitted parameters
-    params = adjuster.get_fitted_params()
+    params = processor.get_fitted_params()
     print(f"Fitted parameters: {params}")
 
 Goodness-of-Fit Testing
@@ -43,17 +43,62 @@ Evaluate how well your distribution fits the data:
 
 .. code-block:: python
 
-    # Perform chi-square test
-    chi2_result = adjuster.goodness_of_fit('chi2')
-    print(f"Chi-square p-value: {chi2_result['p_value']}")
-    
     # Perform Kolmogorov-Smirnov test
-    ks_result = adjuster.goodness_of_fit('ks')
-    print(f"KS p-value: {ks_result['p_value']}")
+    ks_result = processor.goodness_of_fit('ks')
+    print(f"KS p-value: {ks_result['p_value']:.4f}")
     
-    # Calculate RMSE
-    rmse_result = adjuster.goodness_of_fit('rmse')
-    print(f"RMSE: {rmse_result['rmse']}")
+    # Perform chi-square test
+    chi2_result = processor.goodness_of_fit('chi2')
+    print(f"Chi-square p-value: {chi2_result['p_value']:.4f}")
+    
+    # Calculate RMSE (recommended)
+    rmse_result = processor.goodness_of_fit('rmse')
+    print(f"RMSE: {rmse_result['rmse']:.6f}")
+
+.. tip::
+   **RMSE is the most reliable metric** for assessing fit quality, especially with large datasets where p-values can be misleading due to the "large sample size effect".
+
+Automatic Distribution Selection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use AutoFitter to automatically find the best distribution:
+
+.. code-block:: python
+
+    # Create AutoFitter with RMSE criterion (recommended)
+    auto_fitter = processor.get_auto_fitter(criterion='rmse')
+    
+    # Find best distribution
+    best = auto_fitter.fit_best_distribution()
+    
+    print(f"Best distribution: {best['distribution']}")
+    print(f"RMSE: {best['rmse']:.6f}")
+    print(f"AIC: {best['aic']:.2f}")
+
+Testing Multiple Distributions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Compare all available distributions:
+
+.. code-block:: python
+
+    # Get all 113+ available distributions
+    all_dists = auto_fitter.get_all_available_distributions()
+    
+    # Test comprehensive set
+    auto_fitter_all = processor.get_auto_fitter(
+        candidates=all_dists,
+        criterion='rmse'
+    )
+    best_comprehensive = auto_fitter_all.fit_best_distribution()
+    
+    # Get comparison table
+    comparison = auto_fitter_all.get_comparison_table(sort_by='rmse')
+    
+    # Show top 5
+    for i, (dist, result) in enumerate(list(comparison.items())[:5], 1):
+        if result['success']:
+            print(f"{i}. {dist}: RMSE={result['rmse']:.6f}")
 
 Monte Carlo Stability Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -62,19 +107,30 @@ Determine the minimum sample size needed for stable parameter estimation:
 
 .. code-block:: python
 
-    # Basic Monte Carlo analysis
-    results = adjuster.monte_carlo_fit(
+    # Fit a distribution first
+    processor.fit_distribution('weibull_min')
+    
+    # Run Monte Carlo analysis with automatic figure generation
+    results = processor.monte_carlo_fit(
         n_repeats=100,
-        tests=['chi2', 'ks']  # default: no summary figure
+        tests=['ks', 'chi2', 'rmse'],  # Always include RMSE!
+        fig_output_path='stability_analysis.png'
     )
     
     # Access results with xarray
     ks_pvalues = results['ks_pvalue']
+    rmse_values = results['rmse']
     param_medians = results['param_0'].median(dim='repeats')
     
     # Check stability points
     stability = results.attrs['stability_points']
-    print(f"Recommended minimum size: {stability['param_0']['size']}")
+    
+    # RMSE is the most reliable stability indicator
+    if 'rmse' in stability:
+        print(f"Recommended minimum size (RMSE): {stability['rmse']['size']}")
+
+.. important::
+   **Always include 'rmse' in your tests** - RMSE provides the most reliable stability detection with smooth, monotonic convergence, unlike p-values which can be erratic.
 
 Working with xarray Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -88,10 +144,13 @@ The Monte Carlo analysis returns an xarray Dataset for easy data manipulation:
     
     # Calculate statistics across repeats
     param_std = results['param_0'].std(dim='repeats')
-    ks_median = results['ks_pvalue'].median(dim='repeats')
+    rmse_median = results['rmse'].median(dim='repeats')
     
     # Plot results directly
-    results['ks_pvalue'].plot(x='sizes')
+    import matplotlib.pyplot as plt
+    results['rmse'].plot(x='sizes')
+    plt.title('RMSE Convergence')
+    plt.show()
     
     # Convert to pandas for further analysis
     df = results.to_dataframe()
@@ -107,28 +166,55 @@ Control the binning strategy for chi-square tests:
 .. code-block:: python
 
     # Use Scott's rule for binning
-    results = adjuster.monte_carlo_fit(
+    results = processor.monte_carlo_fit(
         n_repeats=200,
-        tests=['chi2'],
+        tests=['chi2', 'rmse'],
         bins='scott',
-        plot_type='boxplots',
-        fig_output_path='chi2_boxplots.png'
+        fig_output_path='chi2_stability.png'
     )
     
     # Access chi-square test results
     chi2_pvalues = results['chi2_pvalue']
 
+Different Sampling Strategies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Choose between random, bootstrap, or disjoint sampling:
+
+.. code-block:: python
+
+    # Random sampling (default)
+    results_random = processor.monte_carlo_fit(
+        sampling='random',
+        n_repeats=100,
+        tests=['ks', 'rmse']
+    )
+    
+    # Bootstrap sampling (with replacement)
+    results_bootstrap = processor.monte_carlo_fit(
+        sampling='bootstrap',
+        n_repeats=100,
+        tests=['ks', 'rmse']
+    )
+    
+    # Disjoint sampling (no overlap)
+    results_disjoint = processor.monte_carlo_fit(
+        sampling='disjoint',
+        n_repeats=20,  # Limited by data size
+        tests=['ks', 'rmse']
+    )
+
 Pre-calculated Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use known distribution parameters instead of fitting (special use case):
+Use known distribution parameters instead of fitting:
 
 .. code-block:: python
 
     # Use known Weibull parameters (shape=2, loc=0, scale=1)
     known_params = (2.0, 0.0, 1.0)
     
-    results = adjuster.monte_carlo_fit(
+    results = processor.monte_carlo_fit(
         distribution_params=known_params,
         n_repeats=150,
         tests=['chi2', 'ks', 'rmse']
@@ -142,79 +228,53 @@ Apply parameter constraints during fitting:
 .. code-block:: python
 
     # Fix location parameter for Weibull distribution
-    results = adjuster.monte_carlo_fit(
+    results = processor.monte_carlo_fit(
         n_repeats=100,
-        tests=['chi2', 'ks'],
+        tests=['ks', 'rmse'],
         fit_kwargs={'floc': 0}  # Force location = 0
     )
     
     # Multiple constraints
-    results = adjuster.monte_carlo_fit(
+    results = processor.monte_carlo_fit(
         n_repeats=100,
-        tests=['chi2', 'ks'],
+        tests=['ks', 'rmse'],
         fit_kwargs={'floc': 0, 'method': 'MLE'}
     )
-
-Pre-calculated Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Use known distribution parameters instead of fitting:
-
-.. code-block:: python
-
-    # Use known Weibull parameters (shape=2, loc=0, scale=1)
-    known_params = (2.0, 0.0, 1.0)
-    
-    results = adjuster.monte_carlo_fit(
-        distribution_params=known_params,
-        n_repeats=150,
-        tests=['chi2', 'ks', 'rmse']
-    )
-    
-    # Parameters are consistent across all repeats
-    assert np.allclose(results['param_0'].values, 2.0)
-
-Custom Fitting Options
-~~~~~~~~~~~~~~~~~~~~~~
-
-Pass additional arguments to the fitting process:
-
-.. code-block:: python
-
-    results = adjuster.monte_carlo_fit(
-        n_repeats=100,
-        tests=['chi2', 'ks'],
-        fit_kwargs={'method': 'MLE', 'optimizer': 'powell'}
-    )
-    
-    # Visualize parameter convergence
-    results['param_0'].plot(x='sizes', hue='repeats', alpha=0.3)
 
 Understanding Results
 ---------------------
 
+Monte Carlo Results Structure
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 The `monte_carlo_fit` method returns an xarray Dataset with:
 
 **Dimensions:**
+
 - **sizes**: Sample sizes tested (e.g., [50, 100, 150, 200, ...])
-- **repeats**: Repetition index for each size (e.g., [0, 1, 2, ..., 19])
+- **repeats**: Repetition index for each size (e.g., [0, 1, 2, ..., 99])
 
 **Data Variables:**
+
 - **param_0, param_1, ...**: Fitted distribution parameters for each size/repeat
-- **ks_statistic, ks_pvalue**: Kolmogorov-Smirnov test results
-- **chi2_statistic, chi2_pvalue**: Chi-square test results
-- **rmse**: Root mean square error values
+- **ks_statistic, ks_pvalue**: Kolmogorov-Smirnov test results (if requested)
+- **chi2_statistic, chi2_pvalue**: Chi-square test results (if requested)
+- **rmse**: Root mean square error values (if requested)
 
 **Attributes:**
+
+- **distribution**: Distribution name
+- **original_data_size**: Size of original dataset
+- **sampling_method**: Sampling strategy used
 - **stability_points**: Detected stability points for each variable
-- **figure_path**: Path to saved summary figure (only if generated)
+- **figure_path**: Path to saved summary figure (if generated)
 
 **Easy Data Access:**
 
 .. code-block:: python
 
-    # Get all KS p-values
-    ks_data = results['ks_pvalue']
+    # Get all RMSE values
+    rmse_data = results['rmse']
     
     # Select specific size
     size_100_data = results.sel(sizes=100)
@@ -223,26 +283,57 @@ The `monte_carlo_fit` method returns an xarray Dataset with:
     param_medians = results['param_0'].median(dim='repeats')
     
     # Check when parameters stabilize
-    stability = results.attrs['stability_points']['param_0']
-    print(f"Parameter 0 stabilizes at size: {stability['size']}")
+    stability = results.attrs['stability_points']
+    if 'param_0' in stability:
+        print(f"Parameter 0 stabilizes at size: {stability['param_0']['size']}")
+    
+    # RMSE stability (most reliable)
+    if 'rmse' in stability:
+        print(f"RMSE stabilizes at size: {stability['rmse']['size']}")
 
-Generating a Summary Figure
+AutoFitter Results
+~~~~~~~~~~~~~~~~~~
+
+AutoFitter returns a dictionary with comprehensive fit information:
+
+.. code-block:: python
+
+    best_result = {
+        'distribution': 'weibull_min',
+        'success': True,
+        'parameters': (2.1, 0.0, 5.3),
+        'rmse': 0.012345,
+        'aic': 1234.5,
+        'bic': 1245.6,
+        'ks_statistic': 0.023,
+        'ks_pvalue': 0.456,
+        'chi2_statistic': 12.3,
+        'chi2_pvalue': 0.234,
+        'adjuster': <MagicAdjuster instance>
+    }
+
+Generating Summary Figures
 ---------------------------
 
+Automatic Summary Plots
+~~~~~~~~~~~~~~~~~~~~~~~
+
 By default no figure is created (faster). Provide a `fig_output_path` to save a
-2x3 summary figure (first row: up to 3 parameters; second row: test p-values / RMSE):
+2×3 summary figure (first row: up to 3 parameters; second row: test metrics):
 
 .. code-block:: python
 
     # Generate and save figure with series style panels
-    results = adjuster.monte_carlo_fit(
-        tests=['ks','chi2','rmse'],
+    results = processor.monte_carlo_fit(
+        tests=['ks', 'chi2', 'rmse'],
+        n_repeats=100,
         fig_output_path='stability_summary.png'
     )
 
     # Boxplot style
-    results = adjuster.monte_carlo_fit(
-        tests=['ks','chi2'],
+    results = processor.monte_carlo_fit(
+        tests=['ks', 'rmse'],
+        n_repeats=100,
         plot_type='boxplots',
         fig_output_path='stability_boxplots.png'
     )
@@ -253,27 +344,111 @@ By default no figure is created (faster). Provide a `fig_output_path` to save a
 The red dashed vertical line in each panel marks the first sample size where
 the corresponding parameter or test metric meets the stability criterion.
 
-You can still craft custom visualizations directly with xarray / matplotlib:
+Custom Visualizations
+~~~~~~~~~~~~~~~~~~~~~~
+
+You can also create custom visualizations directly with xarray/matplotlib:
 
 .. code-block:: python
 
-    results['param_0'].plot(x='sizes')
+    import matplotlib.pyplot as plt
+    
+    # Plot RMSE convergence
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot each repeat as a thin line
+    for i in range(results.sizes['repeats']):
+        results['rmse'].isel(repeats=i).plot(ax=ax, alpha=0.3, color='blue')
+    
+    # Plot median as thick line
+    results['rmse'].median(dim='repeats').plot(ax=ax, linewidth=3, color='red', label='Median')
+    
+    # Mark stability point
+    if 'rmse' in results.attrs['stability_points']:
+        stable_size = results.attrs['stability_points']['rmse']['size']
+        ax.axvline(stable_size, color='green', linestyle='--', linewidth=2, label=f'Stable at {stable_size}')
+    
+    ax.set_title('RMSE Convergence Analysis')
+    ax.set_xlabel('Sample Size')
+    ax.set_ylabel('RMSE')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('custom_rmse_plot.png', dpi=150)
+    plt.show()
 
 Supported Distributions
 -----------------------
 
 MagicA supports all continuous distributions from scipy.stats, including:
 
-- `'norm'` - Normal distribution
-- `'weibull_min'` - Weibull distribution
+**Common Distributions:**
+
+- `'norm'` - Normal (Gaussian) distribution
+- `'weibull_min'` - Weibull distribution (most common form)
+- `'weibull_max'` - Weibull maximum distribution
 - `'gamma'` - Gamma distribution
-- `'exponweib'` - Exponentiated Weibull
 - `'lognorm'` - Log-normal distribution
-- And many more...
+- `'expon'` - Exponential distribution
+- `'rayleigh'` - Rayleigh distribution (wind speed)
+- `'beta'` - Beta distribution
+- `'chi2'` - Chi-square distribution
+- `'uniform'` - Uniform distribution
+
+**Extreme Value Distributions:**
+
+- `'gumbel_r'` - Gumbel (right) distribution
+- `'gumbel_l'` - Gumbel (left) distribution  
+- `'genextreme'` - Generalized Extreme Value
+- `'exponweib'` - Exponentiated Weibull
+
+**Environmental Data Distributions:**
+
+- `'weibull_min'` - Wind speed (most common)
+- `'lognorm'` - Rainfall, pollutant concentrations
+- `'gamma'` - Rainfall amounts
+- `'maxwell'` - Molecular speeds, wave heights
+- `'rice'` - Wind with persistent component
+
+**113+ Total Distributions Available** - See ``AutoFitter.get_all_available_distributions()`` for complete list.
+
+Best Practices
+--------------
+
+Distribution Selection
+~~~~~~~~~~~~~~~~~~~~~~
+
+1. **Use RMSE as primary criterion** for real-world data
+2. **Start with AutoFitter's default list** (16 stable distributions) for quick analysis
+3. **Test comprehensive set** (113+ distributions) when you need the absolute best fit
+4. **Create domain-specific lists** (e.g., wind, rainfall) for faster, targeted analysis
+5. **Avoid p-value-only selection** with large datasets (>10,000 samples)
+
+Monte Carlo Analysis
+~~~~~~~~~~~~~~~~~~~~~
+
+1. **Always include 'rmse' in tests** - most reliable stability indicator
+2. **Use 100+ repeats** for robust stability detection
+3. **Choose appropriate sampling**:
+   - `'random'` - General purpose, allows overlap
+   - `'bootstrap'` - With replacement, good for uncertainty
+   - `'disjoint'` - No overlap, limited by data size
+4. **Generate summary figures** with `fig_output_path` for visual inspection
+5. **Check RMSE stability first**, then validate with other metrics
+
+Large Sample Size Effect
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. warning::
+   With large datasets (>10,000 observations), goodness-of-fit tests (KS, Chi-square) tend to reject even excellent fits. **Use RMSE for large datasets.**
+
+See the :doc:`tutorials/magic_adjuster_tutorial` section on "Large Sample Size Effect" for detailed explanation and examples.
 
 Next Steps
 ----------
 
 - Explore the :doc:`tutorials/index` for detailed examples
-- Check the :doc:`api/core` for complete API documentation
+- Learn about :doc:`api/auto_fitter` for automatic distribution selection
+- Read :doc:`api/monte_carlo` for comprehensive Monte Carlo documentation
+- Check :doc:`api/core` for complete API reference
 - See :doc:`contributing` for development guidelines

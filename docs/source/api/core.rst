@@ -11,10 +11,35 @@ The core module contains the primary classes for statistical data processing and
 DataProcessor
 -------------
 
+The `DataProcessor` class handles data loading, validation, and provides access to distribution fitting capabilities.
+
 .. autoclass:: magica.core.DataProcessor
    :members:
    :undoc-members:
    :show-inheritance:
+
+Automatic Distribution Selection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+DataProcessor provides the `get_auto_fitter()` method to create an AutoFitter instance for automatic distribution selection:
+
+.. code-block:: python
+
+    import numpy as np
+    import magica as ma
+    
+    # Load data
+    data = np.random.weibull(2, 1000)
+    processor = ma.read_data(data)
+    
+    # Get AutoFitter for automatic distribution selection
+    auto_fitter = processor.get_auto_fitter(criterion='rmse')
+    
+    # Find best distribution
+    best = auto_fitter.fit_best_distribution()
+    print(f"Best distribution: {best['distribution']}")
+
+For complete AutoFitter documentation, see :doc:`auto_fitter`.
 
 MagicAdjuster
 ---------------
