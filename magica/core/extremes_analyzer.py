@@ -180,12 +180,17 @@ class ExtremesAnalyzer:
         """
         Fit a statistical distribution for extreme value analysis.
         
+        This method can be called directly on ExtremesAnalyzer to fit
+        distributions to the extreme data, without requiring a prior
+        fit on the underlying DataProcessor.
+        
         Common distributions for extremes:
         - 'genextreme' - Generalized Extreme Value (GEV)
         - 'gumbel_r' - Gumbel distribution (Type I extreme)
         - 'gumbel_l' - Gumbel left (minimum extremes)
         - 'weibull_min' - Weibull (minimum extremes)
         - 'weibull_max' - Weibull (maximum extremes)
+        - 'genpareto' - Generalized Pareto Distribution (GPD, for POT)
         
         Parameters
         ----------
@@ -198,6 +203,18 @@ class ExtremesAnalyzer:
         -------
         ExtremesAnalyzer
             Self for method chaining
+            
+        Examples
+        --------
+        >>> # Direct fitting on extremes analyzer
+        >>> extremes = processor.get_extremes_analyzer()
+        >>> annual_max, times = extremes.extract_block_maxima('Y')
+        >>> 
+        >>> # Create new processor with maxima and fit
+        >>> maxima_proc = ma.read_data(annual_max)
+        >>> maxima_extremes = maxima_proc.get_extremes_analyzer()
+        >>> maxima_extremes.fit_distribution('genextreme')
+        >>> rv_100 = maxima_extremes.return_value(100)
         """
         adjuster = self._get_adjuster()
         adjuster.fit_distribution(distribution, **kwargs)
@@ -234,7 +251,10 @@ class ExtremesAnalyzer:
         >>> rv = extremes.return_value(periods)
         """
         if self._adjuster is None or self.fitted_params is None:
-            raise ValueError("Must fit a distribution before calculating return values")
+            raise ValueError(
+                "Must fit a distribution before calculating return values. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
         
         # Convert return period to exceedance probability
         # P(X > x) = 1/T  =>  P(X <= x) = 1 - 1/T
@@ -275,7 +295,10 @@ class ExtremesAnalyzer:
         >>> rp = extremes.return_period(values)
         """
         if self._adjuster is None or self.fitted_params is None:
-            raise ValueError("Must fit a distribution before calculating return periods")
+            raise ValueError(
+                "Must fit a distribution before calculating return periods. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
         
         # Calculate exceedance probability: P(X > value)
         value = np.asarray(value)
@@ -290,6 +313,100 @@ class ExtremesAnalyzer:
         )
         
         return return_periods
+    
+    def ppf(self, q: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """
+        Percent point function (inverse of CDF) of the fitted distribution.
+        
+        Parameters
+        ----------
+        q : float or array-like
+            Probability value(s) between 0 and 1
+            
+        Returns
+        -------
+        float or ndarray
+            Quantile(s) corresponding to the probability value(s)
+        """
+        if self._adjuster is None or self.fitted_params is None:
+            raise ValueError(
+                "Must fit a distribution before using ppf. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
+        return self._adjuster.ppf(q)
+    
+    def cdf(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """
+        Cumulative distribution function of the fitted distribution.
+        
+        Parameters
+        ----------
+        x : float or array-like
+            Value(s) at which to evaluate the CDF
+            
+        Returns
+        -------
+        float or ndarray
+            Probability value(s) corresponding to x
+        """
+        if self._adjuster is None or self.fitted_params is None:
+            raise ValueError(
+                "Must fit a distribution before using cdf. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
+        return self._adjuster.cdf(x)
+    
+    def pdf(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """
+        Probability density function of the fitted distribution.
+        
+        Parameters
+        ----------
+        x : float or array-like
+            Value(s) at which to evaluate the PDF
+            
+        Returns
+        -------
+        float or ndarray
+            Probability density value(s) corresponding to x
+        """
+        if self._adjuster is None or self.fitted_params is None:
+            raise ValueError(
+                "Must fit a distribution before using pdf. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
+        return self._adjuster.pdf(x)
+    
+    def goodness_of_fit(self, method: str, **kwargs):
+        """
+        Perform goodness-of-fit test for the fitted distribution.
+        
+        Parameters
+        ----------
+        method : str
+            Test method: 'ks' (Kolmogorov-Smirnov), 'chi2' (Chi-square),
+            'ad' (Anderson-Darling), or 'rmse' (Root Mean Square Error)
+        **kwargs : dict
+            Additional arguments passed to the goodness-of-fit method
+            
+        Returns
+        -------
+        dict or float
+            Test results (dict for statistical tests, float for RMSE)
+            
+        Examples
+        --------
+        >>> extremes.fit_distribution('genextreme')
+        >>> ks_test = extremes.goodness_of_fit('ks')
+        >>> print(f"KS statistic: {ks_test['ks_statistic']:.4f}")
+        >>> print(f"P-value: {ks_test['p_value']:.4f}")
+        """
+        if self._adjuster is None or self.fitted_params is None:
+            raise ValueError(
+                "Must fit a distribution before performing goodness-of-fit test. "
+                "Use extremes.fit_distribution('genextreme') or similar first."
+            )
+        return self._adjuster.goodness_of_fit(method, **kwargs)
     
     def extract_block_maxima(
         self,
@@ -354,7 +471,8 @@ class ExtremesAnalyzer:
     def peaks_over_threshold(
         self,
         threshold: float,
-        min_separation: Optional[Union[str, pd.Timedelta]] = None
+        min_separation: Optional[Union[str, pd.Timedelta, int, float]] = None,
+        event_wise: bool = False
     ) -> Tuple[np.ndarray, Optional[Union[pd.DatetimeIndex, np.ndarray]]]:
         """
         Extract peaks over threshold (POT) from time series.
@@ -365,10 +483,19 @@ class ExtremesAnalyzer:
         ----------
         threshold : float
             Threshold value for peak detection
-        min_separation : str or Timedelta, optional
+        min_separation : str, Timedelta, int, or float, optional
             Minimum time separation between peaks to avoid clustering.
-            Examples: '1D', '12H', pd.Timedelta(days=1)
+            Can be:
+            - String: '1D', '12H', etc. (pandas time string)
+            - pd.Timedelta: pd.Timedelta(days=1)
+            - Numeric: interpreted as days (e.g., 3 means 3 days)
+            - 'event': Use event-wise declustering (requires event_wise=True)
             If None, all exceedances are returned.
+        event_wise : bool, default=False
+            If True, identifies consecutive periods above threshold as single events
+            and returns only the maximum value from each event. This is useful for
+            identifying storm events where multiple consecutive days exceed the threshold.
+            When True, min_separation is ignored.
             
         Returns
         -------
@@ -382,30 +509,80 @@ class ExtremesAnalyzer:
         >>> # Extract all peaks over threshold
         >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0)
         >>> 
-        >>> # Extract peaks with minimum 1-day separation
+        >>> # Extract peaks with minimum 1-day separation (numeric)
+        >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0, min_separation=1)
+        >>> 
+        >>> # Extract peaks with minimum 1-day separation (string)
         >>> peaks, times = extremes.peaks_over_threshold(
         ...     threshold=20.0,
         ...     min_separation='1D'
         ... )
+        >>> 
+        >>> # Extract one peak per consecutive event (storm-wise)
+        >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0, event_wise=True)
         """
         # Find values exceeding threshold
         exceed_mask = self.data > threshold
-        exceedances = self.data[exceed_mask]
-        exceed_times = self.times[exceed_mask] if self.times is not None else None
         
-        if min_separation is None or exceed_times is None:
-            return exceedances, exceed_times
-        
-        # Decluster - keep only peaks separated by min_separation
         if not self.has_datetime:
-            warnings.warn(
-                "min_separation requires datetime information. "
-                "Returning all exceedances without declustering."
-            )
+            exceedances = self.data[exceed_mask]
+            exceed_times = None
+            if min_separation is not None or event_wise:
+                warnings.warn(
+                    "min_separation and event_wise require datetime information. "
+                    "Returning all exceedances without declustering."
+                )
             return exceedances, exceed_times
         
+        # Event-wise declustering: identify consecutive periods as single events
+        if event_wise:
+            # Create pandas Series for easier manipulation
+            series = pd.Series(self.data, index=self.times)
+            
+            # Identify groups of consecutive exceedances
+            # Create a group ID that increments when there's a gap
+            exceed_series = series[exceed_mask]
+            
+            if len(exceed_series) == 0:
+                return np.array([]), pd.DatetimeIndex([])
+            
+            # Calculate time differences between consecutive exceedances
+            time_diffs = exceed_series.index.to_series().diff()
+            
+            # Expected time step (most common difference in original series)
+            original_diffs = pd.Series(self.times).diff().dropna()
+            expected_step = original_diffs.mode()[0] if len(original_diffs) > 0 else pd.Timedelta(days=1)
+            
+            # A new event starts when the gap is larger than expected step
+            # (i.e., there's at least one day below threshold)
+            is_new_event = time_diffs > expected_step
+            event_ids = is_new_event.cumsum()
+            
+            # For each event, get the maximum value and its time
+            event_maxima = []
+            event_times = []
+            
+            for event_id in event_ids.unique():
+                event_data = exceed_series[event_ids == event_id]
+                max_idx = event_data.idxmax()
+                event_maxima.append(event_data[max_idx])
+                event_times.append(max_idx)
+            
+            return np.array(event_maxima), pd.DatetimeIndex(event_times)
+        
+        # Regular declustering with min_separation
+        exceedances = self.data[exceed_mask]
+        exceed_times = self.times[exceed_mask]
+        
+        if min_separation is None:
+            return exceedances, exceed_times
+        
+        # Convert min_separation to Timedelta
         if isinstance(min_separation, str):
             min_separation = pd.Timedelta(min_separation)
+        elif isinstance(min_separation, (int, float)):
+            # Interpret numeric values as days
+            min_separation = pd.Timedelta(days=min_separation)
         
         # Decluster algorithm
         keep_indices = [0]  # Always keep first peak
@@ -427,23 +604,31 @@ class ExtremesAnalyzer:
         -------
         dict
             Dictionary with summary statistics including:
-            - data_length: Number of data points
+            - n_observations: Number of data points
             - time_span: Total time span in time_unit units
-            - max_value: Maximum value in dataset
-            - min_value: Minimum value in dataset
-            - mean_value: Mean value
+            - time_unit: Time unit used for calculations
+            - max: Maximum value in dataset
+            - min: Minimum value in dataset
+            - mean: Mean value
+            - std: Standard deviation
+            - percentile_95: 95th percentile
+            - percentile_99: 99th percentile
             - has_datetime: Whether datetime information is available
-            - distribution: Fitted distribution name (if fitted)
+            - distribution_name: Fitted distribution name (if fitted)
+            - distribution_params: Fitted parameters (if fitted)
         """
         summary = {
-            'data_length': len(self.data),
+            'n_observations': len(self.data),
             'time_span': self.time_span,
             'time_unit': self.time_unit,
-            'max_value': float(np.max(self.data)),
-            'min_value': float(np.min(self.data)),
-            'mean_value': float(np.mean(self.data)),
+            'max': float(np.max(self.data)),
+            'min': float(np.min(self.data)),
+            'mean': float(np.mean(self.data)),
+            'std': float(np.std(self.data)),
+            'percentile_95': float(np.percentile(self.data, 95)),
+            'percentile_99': float(np.percentile(self.data, 99)),
             'has_datetime': self.has_datetime,
-            'distribution': self.distribution_name
+            'distribution_name': self.distribution_name
         }
         
         if self.has_datetime:
@@ -451,41 +636,60 @@ class ExtremesAnalyzer:
             summary['end_date'] = str(self.times[-1])
         
         if self.fitted_params is not None:
-            summary['fitted_parameters'] = self.fitted_params
+            summary['distribution_params'] = self.fitted_params
             
         return summary
     
     def plot_return_levels(
         self,
+        ax=None,
         return_periods: Optional[np.ndarray] = None,
         empirical: bool = True,
-        confidence_level: Optional[float] = None
+        confidence_level: Optional[float] = None,
+        title: Optional[str] = None
     ):
         """
         Plot return level plot (return value vs return period).
         
         Parameters
         ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes object to plot on. If None, creates a new figure and axes.
         return_periods : array-like, optional
             Return periods to plot. If None, uses logarithmic spacing.
         empirical : bool, default=True
             Whether to include empirical return values
         confidence_level : float, optional
             Confidence level for confidence intervals (e.g., 0.95)
+        title : str, optional
+            Plot title. If None, uses default title.
             
         Returns
         -------
         fig : matplotlib.figure.Figure
-            Figure object
+            Figure object (None if ax was provided)
         ax : matplotlib.axes.Axes
             Axes object
+            
+        Examples
+        --------
+        >>> # Create standalone plot
+        >>> fig, ax = extremes.plot_return_levels()
+        >>> 
+        >>> # Plot on existing axes
+        >>> fig, ax = plt.subplots()
+        >>> extremes.plot_return_levels(ax=ax, title='Custom Title')
         """
         import matplotlib.pyplot as plt
         
         if self._adjuster is None or self.fitted_params is None:
             raise ValueError("Must fit a distribution before plotting return levels")
         
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Create figure if ax not provided
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+        else:
+            fig = None
         
         # Default return periods
         if return_periods is None:
@@ -510,12 +714,14 @@ class ExtremesAnalyzer:
         
         ax.set_xlabel(f'Return Period ({self.time_unit})')
         ax.set_ylabel('Return Value')
-        ax.set_title('Return Level Plot')
+        ax.set_title(title if title else 'Return Level Plot')
         ax.set_xscale('log')
         ax.grid(True, alpha=0.3, which='both')
         ax.legend()
         
-        plt.tight_layout()
+        if fig is not None:
+            plt.tight_layout()
+        
         return fig, ax
     
     def __repr__(self) -> str:
