@@ -72,6 +72,40 @@ This tutorial covers:
 - Understand trade-offs between speed (default list) and thoroughness (comprehensive)
 - Apply best practices for real-world vs. synthetic data
 
+Extreme Value Analysis Tutorial
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Comprehensive guide to analyzing extreme events with return period calculations and extreme value distributions.**
+
+This tutorial covers:
+
+- Creating ExtremesAnalyzer from time series data
+- **Block Maxima approach** - GEV (Generalized Extreme Value) distribution
+- **Peaks Over Threshold (POT)** - GPD (Generalized Pareto Distribution)
+- Return period and return value calculations
+- Declustering techniques for independent extreme events
+- Monthly and seasonal block maxima extraction
+- Return level plots and visualization
+- Comparing GEV vs. GPD approaches
+- Flexible time series handling (pandas, datetime64, numeric arrays)
+- Best practices for extreme value analysis
+
+.. important::
+   This tutorial demonstrates real-world applications in **wind engineering, climate studies, and structural design** using both classical (Block Maxima) and modern (POT) extreme value methods.
+
+.. toctree::
+   :maxdepth: 1
+
+   extremes_tutorial
+
+**Key Learning Outcomes:**
+
+- Master both Block Maxima (GEV) and POT (GPD) methods
+- Calculate design values for infrastructure (10-year, 50-year, 100-year return periods)
+- Understand when to use each extreme value approach
+- Extract and analyze seasonal patterns in extremes
+- Apply proper declustering for POT analysis
+
 API Usage Tutorial
 ------------------
 
@@ -107,7 +141,15 @@ Which Tutorial Should I Use?
 - ✓ You're exploring a new dataset
 - ✓ You want to validate your distribution choice
 
-**Both tutorials emphasize:**
+**Choose Extreme Value Analysis Tutorial if:**
+
+- ✓ You need to calculate return periods and design values
+- ✓ You're working with extreme events (storms, floods, heat waves)
+- ✓ You need 10-year, 50-year, or 100-year design values
+- ✓ You want to compare Block Maxima (GEV) vs. POT (GPD) approaches
+- ✓ You're doing wind/structural engineering or climate risk assessment
+
+**All tutorials emphasize:**
 
 - ⭐ **RMSE as the most reliable metric** for fit quality
 - 📊 When p-values are trustworthy vs. misleading
@@ -143,6 +185,7 @@ Download the following files to run locally:
 
 * :download:`magic_adjuster_tutorial.ipynb <magic_adjuster_tutorial.ipynb>` - Complete MagicAdjuster tutorial with Monte Carlo CPS methods
 * :download:`auto_fitter_tutorial.ipynb <auto_fitter_tutorial.ipynb>` - Comprehensive AutoFitter tutorial with RMSE emphasis
+* :download:`extremes_tutorial.ipynb <extremes_tutorial.ipynb>` - Extreme value analysis with GEV and GPD distributions
 
 **Legacy Materials:**
 
@@ -182,6 +225,6 @@ Next Steps
 After completing the tutorials:
 
 - Apply MagicA to your own data
-- Explore the :doc:`/api/core` and :doc:`/api/auto_fitter` documentation
+- Explore the :doc:`/api/core`, :doc:`/api/auto_fitter`, and :doc:`/api/extremes` documentation
 - Read about :doc:`/api/monte_carlo` for advanced stability analysis
 - Check :doc:`/contributing` to contribute to the project

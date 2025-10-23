@@ -100,6 +100,45 @@ Compare all available distributions:
         if result['success']:
             print(f"{i}. {dist}: RMSE={result['rmse']:.6f}")
 
+Extreme Value Analysis
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Analyze extreme values and calculate return periods for time series data:
+
+.. code-block:: python
+
+    import pandas as pd
+    
+    # Create time series with datetime index
+    dates = pd.date_range('1980-01-01', '2023-12-31', freq='D')
+    wind_speeds = np.random.weibull(2.5, len(dates)) * 15 + 5
+    series = pd.Series(wind_speeds, index=dates)
+    
+    # Load data and create extremes analyzer
+    processor = ma.read_data(series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Fit GEV distribution (common for extremes)
+    extremes.fit_distribution('genextreme')
+    
+    # Calculate return values
+    rv_50 = extremes.return_value(50)   # 50-year return value
+    rv_100 = extremes.return_value(100) # 100-year return value
+    
+    print(f"50-year return value: {rv_50:.2f} m/s")
+    print(f"100-year return value: {rv_100:.2f} m/s")
+    
+    # Calculate return period for specific value
+    rp = extremes.return_period(30.0)
+    print(f"A value of 30 m/s has a return period of {rp:.1f} years")
+
+.. tip::
+   **Common extreme value distributions**:
+   
+   - ``'genextreme'``: Generalized Extreme Value (GEV) - most flexible
+   - ``'gumbel_r'``: Gumbel distribution - common for environmental extremes
+   - ``'weibull_max'``: Weibull maximum - for maximum extremes
+
 Monte Carlo Stability Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -208,6 +247,87 @@ Pre-calculated Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use known distribution parameters instead of fitting:
+
+.. code-block:: python
+
+    # Use known Weibull parameters (shape=2, loc=0, scale=1)
+    known_params = (2.0, 0.0, 1.0)
+    
+    results = processor.monte_carlo_fit(
+        distribution_params=known_params,
+        n_repeats=150,
+        tests=['chi2', 'ks', 'rmse']
+    )
+
+Block Maxima for Extreme Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Extract block maxima from time series for GEV analysis:
+
+.. code-block:: python
+
+    import pandas as pd
+    
+    # Create daily time series
+    dates = pd.date_range('1980-01-01', '2023-12-31', freq='D')
+    values = np.random.weibull(2.5, len(dates)) * 15 + 5
+    series = pd.Series(values, index=dates)
+    
+    # Create extremes analyzer
+    processor = ma.read_data(series)
+    extremes = processor.get_extremes_analyzer()
+    
+    # Extract annual maxima
+    annual_max, times = extremes.extract_block_maxima(block_size='A')
+    print(f"Extracted {len(annual_max)} annual maxima")
+    
+    # Create new analyzer with annual maxima
+    processor_annual = ma.read_data(pd.Series(annual_max, index=times))
+    extremes_annual = processor_annual.get_extremes_analyzer()
+    extremes_annual.fit_distribution('genextreme')
+    
+    # Calculate design values
+    design_values = extremes_annual.return_value([10, 50, 100])
+    print(f"10-year: {design_values[0]:.2f}")
+    print(f"50-year: {design_values[1]:.2f}")
+    print(f"100-year: {design_values[2]:.2f}")
+    
+    # Plot return levels
+    fig, ax = extremes_annual.plot_return_levels()
+
+Peaks Over Threshold Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Analyze extreme values using peaks over threshold (POT):
+
+.. code-block:: python
+
+    import pandas as pd
+    
+    # Create hourly time series
+    dates = pd.date_range('2010-01-01', '2023-12-31', freq='H')
+    wave_heights = np.random.weibull(2, len(dates)) * 3 + 0.5
+    series = pd.Series(wave_heights, index=dates)
+    
+    # Create extremes analyzer
+    processor = ma.read_data(series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Define threshold (90th percentile)
+    threshold = np.percentile(wave_heights, 90)
+    
+    # Extract peaks with declustering
+    peaks, peak_times = extremes.peaks_over_threshold(
+        threshold=threshold,
+        min_separation='12H'  # Minimum 12 hours between peaks
+    )
+    
+    print(f"Found {len(peaks)} independent peaks above {threshold:.2f} m")
+    
+    # Fit GPD to excesses
+    excesses = peaks - threshold
+    processor_pot = ma.read_data(excesses)
+    processor_pot.fit_distribution('genpareto')
 
 .. code-block:: python
 
@@ -444,11 +564,27 @@ Large Sample Size Effect
 
 See the :doc:`tutorials/magic_adjuster_tutorial` section on "Large Sample Size Effect" for detailed explanation and examples.
 
+Extreme Value Analysis
+~~~~~~~~~~~~~~~~~~~~~~~
+
+1. **Use GEV (genextreme) for block maxima** - most flexible for annual/monthly maxima
+2. **Use GPD (genpareto) for POT** - peaks over threshold analysis
+3. **Require sufficient data**: Minimum 20-30 years for annual maxima
+4. **Check stationarity**: Extreme value theory assumes stationary data
+5. **Decluster POT data**: Use `min_separation` to ensure independence
+
+**Time Series Requirements:**
+
+- Use pandas Series with datetime index for automatic time handling
+- Or provide times separately via `get_extremes_analyzer(times=...)`
+- Specify appropriate `time_unit` ('years', 'days', 'hours', 'months')
+
 Next Steps
 ----------
 
 - Explore the :doc:`tutorials/index` for detailed examples
 - Learn about :doc:`api/auto_fitter` for automatic distribution selection
 - Read :doc:`api/monte_carlo` for comprehensive Monte Carlo documentation
-- Check :doc:`api/core` for complete API reference
-- See :doc:`contributing` for development guidelines
+- Check :doc:`api/extremes` for complete extreme value analysis documentation
+- See :doc:`api/core` for complete API reference
+- Check :doc:`contributing` for development guidelines

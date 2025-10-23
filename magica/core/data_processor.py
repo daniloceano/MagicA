@@ -32,6 +32,9 @@ class DataProcessor:
         self.data = None
         self.metadata = {}
         
+        # Store original data to preserve datetime index for extremes analysis
+        self._original_data = None
+        
         # Internal adjuster for distribution fitting
         self._adjuster = None
         
@@ -56,6 +59,9 @@ class DataProcessor:
         DataProcessor
             Processor instance with loaded data
         """
+        # Store original data before conversion
+        self._original_data = data
+        
         if isinstance(data, np.ndarray):
             self.data = data.flatten() if data.ndim > 1 else data.copy()
             
@@ -224,6 +230,65 @@ class DataProcessor:
             raise ValueError("No data has been loaded.")
             
         return AutoFitter(self, candidates=candidates, criterion=criterion)
+    
+    def get_extremes_analyzer(
+        self, 
+        times: Optional[Union[np.ndarray, pd.Series, pd.DatetimeIndex]] = None,
+        time_unit: str = 'years'
+    ):
+        """
+        Create an ExtremesAnalyzer instance for extreme value analysis.
+        
+        This method provides access to return period and return value analysis
+        for extreme events in time series data.
+        
+        Parameters
+        ----------
+        times : array-like, optional
+            Time values corresponding to data points. Can be:
+            - pandas DatetimeIndex
+            - pandas Series with datetime values
+            - numpy array of datetime64
+            - numpy array of numeric values (e.g., years)
+            - None if data is pandas Series with datetime index
+        time_unit : str, default='years'
+            Unit for return period calculations.
+            Options: 'years', 'days', 'hours', 'months'
+            
+        Returns
+        -------
+        ExtremesAnalyzer
+            ExtremesAnalyzer instance configured with this data
+            
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> import magica as ma
+        >>> 
+        >>> # Using pandas Series with datetime index
+        >>> dates = pd.date_range('2000-01-01', periods=1000, freq='D')
+        >>> values = np.random.weibull(2, 1000) * 10
+        >>> series = pd.Series(values, index=dates)
+        >>> 
+        >>> processor = ma.read_data(series)
+        >>> extremes = processor.get_extremes_analyzer()
+        >>> extremes.fit_distribution('genextreme')
+        >>> 
+        >>> # Calculate 100-year return value
+        >>> rv_100 = extremes.return_value(100)
+        >>> 
+        >>> # Or provide times separately
+        >>> processor2 = ma.read_data(values)
+        >>> extremes2 = processor2.get_extremes_analyzer(times=dates)
+        """
+        # Import here to avoid circular imports
+        from .extremes_analyzer import ExtremesAnalyzer
+        
+        if self.data is None:
+            raise ValueError("No data has been loaded.")
+            
+        return ExtremesAnalyzer(self, times=times, time_unit=time_unit)
     
     def _update_metadata(self):
         """Update data metadata."""

@@ -41,6 +41,32 @@ DataProcessor provides the `get_auto_fitter()` method to create an AutoFitter in
 
 For complete AutoFitter documentation, see :doc:`auto_fitter`.
 
+Extreme Value Analysis
+~~~~~~~~~~~~~~~~~~~~~~~
+
+DataProcessor also provides the `get_extremes_analyzer()` method to create an ExtremesAnalyzer instance for return period and return value analysis:
+
+.. code-block:: python
+
+    import pandas as pd
+    import magica as ma
+    
+    # Create time series with datetime index
+    dates = pd.date_range('1980-01-01', '2023-12-31', freq='D')
+    wind_speeds = [...]  # your data
+    series = pd.Series(wind_speeds, index=dates)
+    
+    # Load data and create extremes analyzer
+    processor = ma.read_data(series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Fit GEV distribution and calculate return values
+    extremes.fit_distribution('genextreme')
+    rv_100 = extremes.return_value(100)  # 100-year return value
+    print(f"100-year return value: {rv_100:.2f}")
+
+For complete ExtremesAnalyzer documentation, see :doc:`extremes`.
+
 MagicAdjuster
 ---------------
 
