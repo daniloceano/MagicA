@@ -5,22 +5,22 @@
   *Magic Adjustment - Advanced Statistical Data Fitting*
 </div>
 
-**MagicA** (Magic Adjustment) is a Python package for statistical data adjustment, with special focus on wind data, including advanced fitting techniques, goodness-of-fit tests, and visualization.
+**MagicA** (Magic Adjustment) is a Python package for statistical data adjustment, with special focus on wind data and extreme value analysis, including advanced fitting techniques, goodness-of-fit tests, and visualization.
 
-## Planned Features
+## Features
 
-- ✨ Distribution fitting (Weibull, Normal, Lognormal, etc.)
-- 📊 Goodness-of-fit tests (Kolmogorov-Smirnov, Anderson-Darling, etc.)
-- 🎯 Automatic best distribution selection
-- 📈 Integrated visualization functions
-- 🌪️ Specialized in wind data analysis
-- 🔧 Advanced statistical fitting techniques
+- 📊 **Distribution Fitting**: Weibull, Normal, Lognormal, Gumbel, GEV, and more
+- ✅ **Goodness-of-Fit Tests**: Kolmogorov-Smirnov and Chi-square tests
+- 🎯 **Extreme Value Analysis**: Peaks Over Threshold (POT), return values, and return periods
+- 🌪️ **Directional Wind Analysis**: Specialized tools for directional extreme wind analysis
+- 📈 **Visualization**: Built-in plotting functions including polar plots for directional data
+- 🔧 **Synthetic Data Generation**: Generate realistic wind data with directional characteristics for testing and development
 
 ## Documentation
 
-📖 **Documentation**: [magica.readthedocs.io](https://magica.readthedocs.io/en/latest/) *(under construction)*
+📖 **Full Documentation**: [magica.readthedocs.io](https://magica.readthedocs.io/en/latest/)
 
-The documentation is currently being built and will include:
+Complete documentation including tutorials, API reference, and examples.
 
 ## Example Wind Data
 
