@@ -450,6 +450,408 @@ Specify the time unit for return period calculations:
     extremes_hours = processor.get_extremes_analyzer(time_unit='hours')
     extremes_months = processor.get_extremes_analyzer(time_unit='months')
 
+Intelligent POT Threshold Selection
+------------------------------------
+
+MagicA provides an automated method for finding optimal POT thresholds that balance the need for:
+- High enough threshold to capture only extreme values
+- Sufficient sample size for reliable fitting (typically ≥50 independent samples)
+- Statistical independence through appropriate declustering
+
+The ``find_optimal_pot_threshold()`` method systematically searches for optimal parameters.
+
+Basic Usage
+~~~~~~~~~~~
+
+.. code-block:: python
+
+    import pandas as pd
+    import magica as ma
+    from magica.utils import generate_wind_data
+    
+    # Generate sample data
+    wind_series = generate_wind_data(n_years=30, freq='D', random_seed=42)
+    
+    # Create extremes analyzer
+    processor = ma.read_data(wind_series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Find optimal threshold automatically
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=50,           # Target minimum independent samples
+        percentile_min=90,        # Start searching at 90th percentile
+        percentile_max=99,        # Stop at 99th percentile
+        min_separation_hours=48,  # Minimum time between independent events
+        max_separation_hours=120, # Maximum separation to try
+        verbose=True              # Show search progress
+    )
+    
+    # Use the results
+    if result['success']:
+        print(f"Optimal threshold: {result['threshold']:.2f}")
+        print(f"Percentile: {result['percentile']:.1f}%")
+        print(f"Separation: {result['separation_hours']} hours")
+        print(f"Independent exceedances: {result['n_independent']}")
+        
+        # Access the exceedances for further analysis
+        exceedances = result['exceedances']
+        exceedance_times = result['exceedance_times']
+
+Search Strategies
+~~~~~~~~~~~~~~~~~
+
+The method supports two search strategies controlled by the ``vary_first`` parameter:
+
+**Strategy 1: Vary Percentile First (default)**
+
+Tests each separation time with decreasing percentiles (99→90):
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=50,
+        vary_first='percentile',  # Default strategy
+        min_separation_hours=48,
+        max_separation_hours=120,
+        separation_step_hours=24
+    )
+    
+    # Search order:
+    # 1. Try separation=48h: test p99, p98, ..., p90
+    # 2. Try separation=72h: test p99, p98, ..., p90
+    # 3. Try separation=96h: test p99, p98, ..., p90
+    # 4. Try separation=120h: test p99, p98, ..., p90
+
+**Strategy 2: Vary Separation First**
+
+Tests each percentile with increasing separations (48h→120h):
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=50,
+        vary_first='separation',  # Alternative strategy
+        percentile_min=90,
+        percentile_max=99
+    )
+    
+    # Search order:
+    # 1. Try p99: test 48h, 72h, 96h, 120h
+    # 2. Try p98: test 48h, 72h, 96h, 120h
+    # 3. Continue until min_samples achieved
+
+Customization Examples
+~~~~~~~~~~~~~~~~~~~~~~
+
+**Conservative Threshold (Higher Percentiles)**
+
+For critical applications requiring very extreme values:
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=30,          # Lower requirement acceptable
+        percentile_min=95,       # Only test high percentiles
+        percentile_max=99.5,
+        percentile_step=0.5,     # Finer search steps
+        min_separation_hours=48,
+        max_separation_hours=72,
+        verbose=True
+    )
+
+**Sub-Daily Events (Shorter Separations)**
+
+For phenomena with shorter temporal dependence:
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=80,          # More samples needed
+        percentile_min=85,       # Lower percentiles
+        percentile_max=95,
+        min_separation_hours=6,  # 6-hour minimum separation
+        max_separation_hours=24,
+        separation_step_hours=6
+    )
+
+**Synoptic-Scale Events (Longer Separations)**
+
+For meteorological events with multi-day persistence:
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=50,
+        percentile_min=90,
+        percentile_max=99,
+        min_separation_hours=72,   # 3-day minimum
+        max_separation_hours=168,  # Up to 7 days
+        separation_step_hours=24
+    )
+
+Return Value Structure
+~~~~~~~~~~~~~~~~~~~~~~
+
+The method returns a dictionary with comprehensive information:
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(min_samples=50)
+    
+    # Always present:
+    result['success']              # bool: True if min_samples achieved
+    result['threshold']            # float: Optimal threshold value
+    result['percentile']           # float: Percentile of threshold
+    result['separation_hours']     # float: Time separation used
+    result['n_raw_exceedances']    # int: Exceedances before declustering
+    result['n_independent']        # int: Independent exceedances after declustering
+    result['exceedances']          # array: Independent exceedance values
+    result['exceedance_times']     # array: Times of independent exceedances
+    result['iterations']           # int: Number of iterations performed
+    
+    # Optional (if min_samples not achieved):
+    result['warning']              # str: Warning message
+
+Best-Effort Fallback
+~~~~~~~~~~~~~~~~~~~~
+
+If the minimum sample size cannot be achieved, the method returns the best result found:
+
+.. code-block:: python
+
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=100,  # May be too high
+        percentile_min=90,
+        percentile_max=99
+    )
+    
+    if not result['success']:
+        print(f"Warning: {result['warning']}")
+        print(f"Achieved {result['n_independent']} samples (target: 100)")
+        print(f"Best threshold: {result['threshold']:.2f}")
+        
+        # Decision: use best-effort or adjust requirements
+        if result['n_independent'] >= 80:  # 80% of target
+            print("Proceeding with reduced sample size")
+        else:
+            print("Consider lowering min_samples or using longer data period")
+
+Integration with POT Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Complete workflow using automated threshold selection:
+
+.. code-block:: python
+
+    import magica as ma
+    from magica.utils import generate_wind_data
+    
+    # Generate data
+    wind_series = generate_wind_data(n_years=30, freq='D')
+    
+    # Create analyzer
+    processor = ma.read_data(wind_series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Find optimal threshold
+    result = extremes.find_optimal_pot_threshold(min_samples=50)
+    
+    if result['success']:
+        # Extract exceedances
+        exceedances = result['exceedances']
+        threshold = result['threshold']
+        
+        # Calculate excesses for GPD fitting
+        excesses = exceedances - threshold
+        
+        # Fit GPD distribution
+        gpd_processor = ma.read_data(excesses)
+        gpd_processor.fit_distribution('genpareto')
+        
+        # Get parameters
+        params = gpd_processor.get_fitted_params()
+        shape, loc, scale = params
+        
+        print(f"GPD parameters: shape={shape:.3f}, scale={scale:.3f}")
+        
+        # Calculate return values
+        # (requires POT-specific return value calculations)
+
+Directional Analysis Example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Apply to each directional sector separately:
+
+.. code-block:: python
+
+    from magica.utils import generate_directional_wind_data
+    import magica as ma
+    
+    # Generate directional data
+    wind_data = generate_directional_wind_data(n_years=10, freq='H')
+    
+    # Define sectors
+    sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    sector_results = {}
+    
+    for sector in sectors:
+        # Filter by sector
+        sector_mask = wind_data['sector_name'] == sector
+        sector_series = wind_data.loc[sector_mask, 'wind_speed']
+        
+        # Analyze
+        processor = ma.read_data(sector_series)
+        extremes = processor.get_extremes_analyzer(time_unit='years')
+        
+        # Find optimal threshold for this sector
+        result = extremes.find_optimal_pot_threshold(
+            min_samples=50,
+            percentile_min=90,
+            percentile_max=99,
+            min_separation_hours=48,
+            max_separation_hours=120,
+            verbose=False
+        )
+        
+        sector_results[sector] = result
+        
+        status = "✓" if result['success'] else "⚠"
+        print(f"{status} {sector}: threshold={result['threshold']:.2f} m/s, "
+              f"n={result['n_independent']}")
+
+Directional Extreme Value Visualization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``plot_directional_return_values()`` method creates polar plots showing how return values vary by direction, which is essential for wind engineering and offshore structure design.
+
+**Key Features:**
+
+- ✅ Flexible layout: separate subplots or single overlay plot
+- ✅ Customizable colors and return periods
+- ✅ Automatic subplot arrangement based on number of periods
+- ✅ Returns figure and axes for further customization
+- ✅ Handles missing/failed sectors gracefully
+
+**Example 1: Separate Subplots (Default)**
+
+.. code-block:: python
+
+    import magica as ma
+    import pandas as pd
+    
+    # After fitting distributions for each directional sector
+    # (See "Directional Analysis" section for complete workflow)
+    
+    # Prepare directional results dictionary
+    directional_results = {}
+    
+    for sector in ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']:
+        # sector_data contains wind speeds for this direction
+        # center_deg is the center angle of the sector (0° for N, 45° for NE, etc.)
+        
+        processor = ma.read_data(sector_data)
+        extremes = processor.get_extremes_analyzer(time_unit='years')
+        extremes.fit_distribution('gumbel_r')
+        
+        # Calculate return values
+        return_values = {
+            10: extremes.return_value(10),
+            20: extremes.return_value(20),
+            50: extremes.return_value(50),
+            100: extremes.return_value(100)
+        }
+        
+        directional_results[sector] = {
+            'center_deg': center_deg,
+            'return_values': return_values,
+            'success': True
+        }
+    
+    # Create polar plots (4 subplots in 2x2 grid)
+    fig, axes = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[10, 20, 50, 100]
+    )
+    plt.show()
+
+**Example 2: Overlay Mode**
+
+All return periods on a single polar plot with legend:
+
+.. code-block:: python
+
+    # Single plot with all periods overlaid
+    fig, ax = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[10, 50, 100],
+        overlay=True,
+        title='Design Wind Speeds by Direction'
+    )
+    plt.show()
+
+**Example 3: Custom Colors and Fewer Periods**
+
+.. code-block:: python
+
+    # Two periods with custom colors (creates single row)
+    fig, axes = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[20, 100],
+        colors=['#FF6B6B', '#4ECDC4'],  # Custom color scheme
+        figsize=(14, 6)
+    )
+    plt.show()
+
+**Example 4: Single Period**
+
+.. code-block:: python
+
+    # Single period creates one subplot
+    fig, ax = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[100],
+        colors=['#C73E1D']
+    )
+    
+    # Further customize the returned figure
+    ax.set_title('100-Year Design Wind Speed', fontsize=16)
+    plt.tight_layout()
+    plt.savefig('design_wind_100yr.png', dpi=300)
+
+**Layout Rules:**
+
+- **1 period**: Single subplot
+- **2 periods**: Single row (1×2)
+- **3-4 periods**: Grid layout (2×2)
+- **Overlay mode**: Always single plot regardless of number of periods
+
+**Input Format:**
+
+The ``directional_results`` dictionary must have this structure:
+
+.. code-block:: python
+
+    directional_results = {
+        'sector_name': {
+            'center_deg': float,        # Center angle in degrees (0-360)
+            'return_values': {          # Dict mapping return period to value
+                10: 25.3,
+                20: 28.1,
+                50: 31.5,
+                100: 34.2
+            },
+            'success': bool             # Whether fit was successful
+        },
+        # ... more sectors ...
+    }
+
+**Use Cases:**
+
+- **Wind engineering**: Design wind loads by direction for structures
+- **Offshore design**: Directional wave height return values
+- **Wind turbine siting**: Extreme wind assessment
+- **Code compliance**: IEC 61400-1 and other standards
+
 Best Practices
 --------------
 

@@ -67,7 +67,10 @@ Contents
    :caption: API Reference
 
    api/core
+   api/auto_fitter
+   api/extremes
    api/monte_carlo
+   api/utils
 
 .. toctree::
    :maxdepth: 1

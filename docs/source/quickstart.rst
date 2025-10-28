@@ -497,6 +497,209 @@ You can also create custom visualizations directly with xarray/matplotlib:
     plt.savefig('custom_rmse_plot.png', dpi=150)
     plt.show()
 
+Synthetic Data Generation
+--------------------------
+
+MagicA provides synthetic data generators for creating realistic test datasets. Perfect for tutorials, testing, and method validation.
+
+Generate Wind Speed Data
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create non-directional wind speed time series with storms and seasonal variations:
+
+.. code-block:: python
+
+    from magica.utils import generate_wind_data
+    import matplotlib.pyplot as plt
+    
+    # Generate 30 years of daily wind data with plots
+    wind_series, plots = generate_wind_data(
+        n_years=30,
+        freq='D',
+        mean_wind=8.0,
+        weibull_shape=2.5,
+        seasonal_amplitude=0.3,
+        n_storms_per_year=5,
+        storm_duration_days=(2, 5),
+        storm_intensity_range=(12, 20),
+        random_seed=42,
+        create_plots=True
+    )
+    
+    plt.show()
+    
+    # Use with MagicA
+    processor = ma.read_data(wind_series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    print(f"Generated {len(wind_series)} observations")
+    print(f"Max wind speed: {wind_series.max():.2f} m/s")
+
+Generate Directional Wind Data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create wind data with directional characteristics:
+
+.. code-block:: python
+
+    from magica.utils import generate_directional_wind_data
+    
+    # Generate 10 years of hourly directional wind data
+    wind_data, plots = generate_directional_wind_data(
+        n_years=10,
+        freq='H',
+        mean_wind=8.0,
+        prevailing_direction=270,  # West
+        directional_concentration=1.5,
+        directional_speed_factors={
+            'W': 1.4,   # Higher speeds from West (fetch effect)
+            'SW': 1.4,
+            'N': 0.8,   # Lower speeds from North (land effect)
+            'NE': 0.8
+        },
+        storm_directions=[250, 270, 290],  # Storms from W/SW
+        random_seed=42,
+        create_plots=True
+    )
+    
+    plt.show()
+    
+    # Access data
+    print(wind_data.head())
+    print(f"Columns: {wind_data.columns.tolist()}")
+
+**Directional Speed Factors** accept three formats:
+
+- **Sector names**: ``{'W': 1.4, 'SW': 1.4, 'N': 0.8}`` (8 sectors: N, NE, E, SE, S, SW, W, NW)
+- **Degree ranges**: ``{(225, 315): 1.4, (0, 90): 0.8}``
+- **Numeric centers**: ``{270: 1.4, 0: 0.8}`` (auto-creates ±22.5° range)
+
+Intelligent POT Threshold Selection
+------------------------------------
+
+Automatically find optimal POT thresholds that balance extreme values with sample size.
+
+Basic Threshold Search
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from magica.utils import generate_wind_data
+    import magica as ma
+    
+    # Generate sample data
+    wind_series = generate_wind_data(n_years=30, freq='D', random_seed=42)
+    
+    # Create extremes analyzer
+    processor = ma.read_data(wind_series)
+    extremes = processor.get_extremes_analyzer(time_unit='years')
+    
+    # Find optimal threshold automatically
+    result = extremes.find_optimal_pot_threshold(
+        min_samples=50,           # Target minimum independent samples
+        percentile_min=90,        # Start at 90th percentile
+        percentile_max=99,        # Stop at 99th percentile
+        min_separation_hours=48,  # Minimum time between events
+        max_separation_hours=120,
+        verbose=True              # Show search progress
+    )
+    
+    # Use the results
+    if result['success']:
+        print(f"Optimal threshold: {result['threshold']:.2f} m/s")
+        print(f"Independent exceedances: {result['n_independent']}")
+        
+        # Access exceedances for further analysis
+        exceedances = result['exceedances']
+        exceedance_times = result['exceedance_times']
+
+Custom Search Strategies
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Control the search order with ``vary_first`` parameter:
+
+.. code-block:: python
+
+    # Strategy 1: Vary percentile first (default)
+    # Tests each separation with decreasing percentiles
+    result1 = extremes.find_optimal_pot_threshold(
+        min_samples=50,
+        vary_first='percentile'  # Default
+    )
+    
+    # Strategy 2: Vary separation first
+    # Tests each percentile with increasing separations
+    result2 = extremes.find_optimal_pot_threshold(
+        min_samples=50,
+        vary_first='separation'
+    )
+
+Directional POT Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Apply to each directional sector:
+
+.. code-block:: python
+
+    from magica.utils import generate_directional_wind_data
+    
+    # Generate directional data
+    wind_data = generate_directional_wind_data(n_years=10, freq='H')
+    
+    # Analyze each sector
+    sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    sector_results = {}
+    
+    for sector in sectors:
+        # Filter by sector
+        sector_mask = wind_data['sector_name'] == sector
+        sector_series = wind_data.loc[sector_mask, 'wind_speed']
+        
+        # Find optimal threshold
+        processor = ma.read_data(sector_series)
+        extremes = processor.get_extremes_analyzer(time_unit='years')
+        
+        result = extremes.find_optimal_pot_threshold(
+            min_samples=50,
+            min_separation_hours=48,
+            max_separation_hours=120
+        )
+        
+        sector_results[sector] = result
+        print(f"{sector}: threshold={result['threshold']:.2f}, "
+              f"n={result['n_independent']}")
+
+Directional Return Value Visualization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create polar plots of return values by direction:
+
+.. code-block:: python
+
+    # After fitting distributions for each sector
+    directional_results = {}
+    
+    for sector in sectors:
+        # ... (fit distribution and calculate return values) ...
+        directional_results[sector] = {
+            'center_deg': center_angle,
+            'return_values': {10: rv10, 50: rv50, 100: rv100},
+            'success': True
+        }
+    
+    # Create polar plots (separate subplots)
+    fig, axes = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[10, 50, 100]
+    )
+    
+    # Or create overlay plot
+    fig, ax = extremes.plot_directional_return_values(
+        directional_results=directional_results,
+        return_periods=[10, 50, 100],
+        overlay=True
+    )
+
 Supported Distributions
 -----------------------
 
@@ -586,5 +789,6 @@ Next Steps
 - Learn about :doc:`api/auto_fitter` for automatic distribution selection
 - Read :doc:`api/monte_carlo` for comprehensive Monte Carlo documentation
 - Check :doc:`api/extremes` for complete extreme value analysis documentation
-- See :doc:`api/core` for complete API reference
-- Check :doc:`contributing` for development guidelines
+- See :doc:`api/utils` for synthetic data generation and utilities
+- Check :doc:`api/core` for complete API reference
+- See :doc:`contributing` for development guidelines

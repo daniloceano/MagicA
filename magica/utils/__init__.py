@@ -1,7 +1,10 @@
 """
-Utils module - Utility functions (will be expanded as needed)
+Utils module - Utility functions for data generation and analysis
 """
 
-# Currently empty - will be expanded based on project needs
+from .synthetic_data import generate_wind_data, generate_directional_wind_data
 
-__all__ = []
+__all__ = [
+    'generate_wind_data',
+    'generate_directional_wind_data',
+]

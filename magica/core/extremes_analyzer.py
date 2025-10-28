@@ -724,6 +724,607 @@ class ExtremesAnalyzer:
         
         return fig, ax
     
+    def find_optimal_pot_threshold(
+        self,
+        min_samples: int = 50,
+        percentile_min: float = 90,
+        percentile_max: float = 99,
+        percentile_step: float = 1.0,
+        min_separation_hours: float = 48,
+        max_separation_hours: float = 120,
+        separation_step_hours: float = 24,
+        vary_first: str = 'percentile',
+        max_iterations: int = 200,
+        verbose: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Find optimal POT threshold ensuring sufficient independent samples.
+        
+        This function systematically searches for a threshold that provides
+        at least `min_samples` independent exceedances after declustering.
+        The search can prioritize varying percentiles or time separation first.
+        
+        Parameters
+        ----------
+        min_samples : int, default=50
+            Minimum number of independent exceedances required
+        percentile_min : float, default=90
+            Minimum percentile to test (lower bound)
+        percentile_max : float, default=99
+            Maximum percentile to test (upper bound, starting point)
+        percentile_step : float, default=1.0
+            Step size for decreasing percentile
+        min_separation_hours : float, default=48
+            Minimum time separation between peaks in hours (starting point)
+        max_separation_hours : float, default=120
+            Maximum time separation to test in hours
+        separation_step_hours : float, default=24
+            Step size for increasing separation in hours
+        vary_first : str, default='percentile'
+            Which parameter to vary first: 'percentile' or 'separation'
+            - 'percentile': Varies percentile from max to min, then increases separation
+            - 'separation': Varies separation from min to max, then decreases percentile
+        max_iterations : int, default=200
+            Maximum total search iterations to prevent infinite loops
+        verbose : bool, default=False
+            Print progress information during search
+            
+        Returns
+        -------
+        dict
+            Dictionary with keys:
+            - 'threshold': Selected threshold value (float)
+            - 'percentile': Percentile of threshold (float)
+            - 'separation_hours': Time separation used in hours (float)
+            - 'n_raw_exceedances': Total exceedances before declustering (int)
+            - 'n_independent': Independent exceedances after declustering (int)
+            - 'exceedances': Array of independent exceedance values (ndarray)
+            - 'exceedance_times': Times of independent exceedances (DatetimeIndex or ndarray)
+            - 'success': Whether minimum samples achieved (bool)
+            - 'iterations': Number of iterations performed (int)
+            - 'warning': Warning message if any (str, optional)
+            
+        Examples
+        --------
+        >>> # Default search (vary percentile first, 99->90, then increase separation)
+        >>> result = extremes.find_optimal_pot_threshold(min_samples=50)
+        >>> print(f"Threshold: {result['threshold']:.2f}")
+        >>> print(f"Independent samples: {result['n_independent']}")
+        >>> 
+        >>> # Vary separation first, then percentile
+        >>> result = extremes.find_optimal_pot_threshold(
+        ...     min_samples=50,
+        ...     vary_first='separation'
+        ... )
+        >>> 
+        >>> # Custom percentile and separation ranges
+        >>> result = extremes.find_optimal_pot_threshold(
+        ...     min_samples=30,
+        ...     percentile_min=85,
+        ...     percentile_max=98,
+        ...     min_separation_hours=24,
+        ...     max_separation_hours=96,
+        ...     verbose=True
+        ... )
+        
+        Notes
+        -----
+        **Search Strategy:**
+        
+        When `vary_first='percentile'` (default):
+        1. Start with min_separation_hours and percentile_max
+        2. Decrease percentile by percentile_step until percentile_min
+        3. If not enough samples, increase separation by separation_step_hours
+        4. Repeat percentile search with new separation
+        5. Continue until max_separation_hours or min_samples achieved
+        
+        When `vary_first='separation'`:
+        1. Start with percentile_max and min_separation_hours
+        2. Increase separation by separation_step_hours until max_separation_hours
+        3. If not enough samples, decrease percentile by percentile_step
+        4. Repeat separation search with new percentile
+        5. Continue until percentile_min or min_samples achieved
+        
+        **Best Practices:**
+        - For synoptic events (storms): min_separation_hours >= 48
+        - For sub-daily events: min_separation_hours >= 12
+        - Typical percentile range: 90-99 for extremes
+        - Ensure min_samples >= 30 for reliable fitting (50+ recommended)
+        """
+        if not self.has_datetime:
+            raise ValueError(
+                "POT threshold search requires datetime information. "
+                "Provide times when creating ExtremesAnalyzer."
+            )
+        
+        if vary_first not in ['percentile', 'separation']:
+            raise ValueError("vary_first must be 'percentile' or 'separation'")
+        
+        # Validate ranges
+        if percentile_min >= percentile_max:
+            raise ValueError("percentile_min must be < percentile_max")
+        if min_separation_hours >= max_separation_hours:
+            raise ValueError("min_separation_hours must be < max_separation_hours")
+        
+        # Initialize search variables
+        iteration = 0
+        best_result = None
+        
+        if vary_first == 'percentile':
+            # Strategy: Vary percentile first, then increase separation
+            separations = np.arange(min_separation_hours, max_separation_hours + 1, 
+                                   separation_step_hours)
+            
+            for separation_hours in separations:
+                if verbose:
+                    print(f"\n--- Testing separation: {separation_hours}h ---")
+                
+                # Test percentiles from max to min
+                current_percentile = percentile_max
+                
+                while current_percentile >= percentile_min:
+                    iteration += 1
+                    
+                    if iteration > max_iterations:
+                        break
+                    
+                    # Calculate threshold
+                    threshold = np.percentile(self.data, current_percentile)
+                    
+                    # Count raw exceedances
+                    n_raw = (self.data > threshold).sum()
+                    
+                    if n_raw == 0:
+                        current_percentile -= percentile_step
+                        continue
+                    
+                    try:
+                        # Extract POT with current separation
+                        sep_days = separation_hours / 24
+                        exceedances, exc_times = self.peaks_over_threshold(
+                            threshold=threshold,
+                            min_separation=sep_days
+                        )
+                        
+                        n_independent = len(exceedances)
+                        
+                        # Store result
+                        result = {
+                            'threshold': threshold,
+                            'percentile': current_percentile,
+                            'separation_hours': separation_hours,
+                            'n_raw_exceedances': n_raw,
+                            'n_independent': n_independent,
+                            'exceedances': exceedances,
+                            'exceedance_times': exc_times,
+                            'success': n_independent >= min_samples,
+                            'iterations': iteration
+                        }
+                        
+                        # Update best result
+                        if best_result is None or n_independent > best_result['n_independent']:
+                            best_result = result.copy()
+                        
+                        if verbose:
+                            status = "✓" if result['success'] else "•"
+                            print(f"{status} p={current_percentile:.1f}, "
+                                  f"thresh={threshold:.2f}, n={n_independent}")
+                        
+                        # Check if we found enough samples
+                        if n_independent >= min_samples:
+                            return result
+                        
+                    except Exception as e:
+                        if verbose:
+                            print(f"✗ p={current_percentile:.1f}: {str(e)}")
+                    
+                    # Decrease percentile
+                    current_percentile -= percentile_step
+                
+                if iteration > max_iterations:
+                    break
+        
+        else:  # vary_first == 'separation'
+            # Strategy: Vary separation first, then decrease percentile
+            percentiles = np.arange(percentile_max, percentile_min - percentile_step, 
+                                   -percentile_step)
+            
+            for percentile in percentiles:
+                if verbose:
+                    print(f"\n--- Testing percentile: {percentile:.1f} ---")
+                
+                # Test separations from min to max
+                current_separation = min_separation_hours
+                
+                while current_separation <= max_separation_hours:
+                    iteration += 1
+                    
+                    if iteration > max_iterations:
+                        break
+                    
+                    # Calculate threshold
+                    threshold = np.percentile(self.data, percentile)
+                    
+                    # Count raw exceedances
+                    n_raw = (self.data > threshold).sum()
+                    
+                    if n_raw == 0:
+                        break  # No exceedances at this percentile
+                    
+                    try:
+                        # Extract POT with current separation
+                        sep_days = current_separation / 24
+                        exceedances, exc_times = self.peaks_over_threshold(
+                            threshold=threshold,
+                            min_separation=sep_days
+                        )
+                        
+                        n_independent = len(exceedances)
+                        
+                        # Store result
+                        result = {
+                            'threshold': threshold,
+                            'percentile': percentile,
+                            'separation_hours': current_separation,
+                            'n_raw_exceedances': n_raw,
+                            'n_independent': n_independent,
+                            'exceedances': exceedances,
+                            'exceedance_times': exc_times,
+                            'success': n_independent >= min_samples,
+                            'iterations': iteration
+                        }
+                        
+                        # Update best result
+                        if best_result is None or n_independent > best_result['n_independent']:
+                            best_result = result.copy()
+                        
+                        if verbose:
+                            status = "✓" if result['success'] else "•"
+                            print(f"{status} sep={current_separation}h, "
+                                  f"thresh={threshold:.2f}, n={n_independent}")
+                        
+                        # Check if we found enough samples
+                        if n_independent >= min_samples:
+                            return result
+                        
+                    except Exception as e:
+                        if verbose:
+                            print(f"✗ sep={current_separation}h: {str(e)}")
+                    
+                    # Increase separation
+                    current_separation += separation_step_hours
+                
+                if iteration > max_iterations:
+                    break
+        
+        # No solution found meeting min_samples requirement
+        if best_result is None:
+            # Return empty result
+            return {
+                'threshold': np.nan,
+                'percentile': np.nan,
+                'separation_hours': np.nan,
+                'n_raw_exceedances': 0,
+                'n_independent': 0,
+                'exceedances': np.array([]),
+                'exceedance_times': pd.DatetimeIndex([]) if self.has_datetime else None,
+                'success': False,
+                'iterations': iteration,
+                'warning': 'No exceedances found in search range'
+            }
+        
+        # Return best effort result
+        best_result['warning'] = (
+            f"Could not find threshold with {min_samples} samples. "
+            f"Best result: {best_result['n_independent']} samples. "
+            f"Consider relaxing constraints."
+        )
+        
+        if verbose:
+            print(f"\n⚠️  {best_result['warning']}")
+        
+        return best_result
+    
+    @staticmethod
+    def plot_directional_return_values(
+        directional_results: Dict[str, Dict[str, Any]],
+        return_periods: list = None,
+        colors: list = None,
+        overlay: bool = False,
+        show_values: bool = True,
+        figsize: tuple = None,
+        title: str = None
+    ) -> tuple:
+        """
+        Create polar plots of return values by direction.
+        
+        This method creates polar plots showing how return values vary by wind
+        direction for different return periods. Can create separate subplots for
+        each return period or overlay all periods in a single plot.
+        
+        Parameters
+        ----------
+        directional_results : dict
+            Dictionary with sector names as keys and result dictionaries as values.
+            Each result dictionary must contain:
+            - 'center_deg': Center angle of sector in degrees
+            - 'return_values': Dictionary mapping return periods to values
+            - 'success': Boolean indicating if fit was successful
+        return_periods : list of int, optional
+            Return periods to plot (max 4). If None, uses [10, 20, 50, 100].
+            Examples: [10, 50], [1, 5, 10, 20], [100]
+        colors : list of str, optional
+            Colors for each return period. If None, uses default palette.
+            Must have same length as return_periods.
+        overlay : bool, default=False
+            If True, plot all return periods on single polar plot.
+            If False, create separate subplot for each return period.
+        show_values : bool, default=True
+            If True, display numeric values on the plot.
+        figsize : tuple, optional
+            Figure size (width, height). If None, automatically determined.
+        title : str, optional
+            Main figure title. If None, uses default title.
+        
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The figure object
+        axes : matplotlib.axes.Axes or array of Axes
+            The axes object(s)
+        
+        Raises
+        ------
+        ValueError
+            If return_periods has more than 4 values
+            If colors length doesn't match return_periods length
+            If directional_results is empty or invalid
+        
+        Examples
+        --------
+        >>> # Assuming you have fitted distributions for each sector
+        >>> directional_results = {}
+        >>> for sector in sectors:
+        ...     # ... fit distribution and calculate return values ...
+        ...     directional_results[sector] = {
+        ...         'center_deg': center_angle,
+        ...         'return_values': {10: rv10, 50: rv50, 100: rv100},
+        ...         'success': True
+        ...     }
+        >>> 
+        >>> # Create separate subplots for each return period
+        >>> fig, axes = extremes.plot_directional_return_values(
+        ...     directional_results,
+        ...     return_periods=[10, 50, 100]
+        ... )
+        >>> 
+        >>> # Create single overlay plot
+        >>> fig, ax = extremes.plot_directional_return_values(
+        ...     directional_results,
+        ...     return_periods=[10, 50, 100],
+        ...     overlay=True
+        ... )
+        >>> 
+        >>> # Customize colors and appearance
+        >>> fig, axes = extremes.plot_directional_return_values(
+        ...     directional_results,
+        ...     return_periods=[20, 100],
+        ...     colors=['#FF6B6B', '#4ECDC4'],
+        ...     figsize=(12, 6)
+        ... )
+        >>> plt.show()
+        
+        Notes
+        -----
+        - Maximum 4 return periods can be plotted
+        - If return_periods <= 2 and not overlay, creates single row of subplots
+        - If return_periods == 1 and not overlay, creates single subplot
+        - In overlay mode, all periods shown on one polar plot with legend
+        - Automatically handles missing/failed sectors
+        """
+        import matplotlib.pyplot as plt
+        
+        # Validate inputs
+        if not directional_results:
+            raise ValueError("directional_results cannot be empty")
+        
+        # Default return periods
+        if return_periods is None:
+            return_periods = [10, 20, 50, 100]
+        
+        # Validate return periods
+        if len(return_periods) > 4:
+            raise ValueError("Maximum 4 return periods can be plotted")
+        if len(return_periods) == 0:
+            raise ValueError("At least one return period must be specified")
+        
+        # Default colors
+        if colors is None:
+            default_colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
+            colors = default_colors[:len(return_periods)]
+        elif len(colors) != len(return_periods):
+            raise ValueError("Number of colors must match number of return periods")
+        
+        # Extract sector information and sort by angle (not alphabetically)
+        # This ensures the polar plot forms a proper circle
+        sector_data = []
+        for sector_name, result in directional_results.items():
+            if 'center_deg' in result:
+                sector_data.append((sector_name, result['center_deg']))
+        
+        # Sort by angle to get proper circular order
+        sector_data.sort(key=lambda x: x[1])
+        sector_names = [name for name, _ in sector_data]
+        
+        if not sector_names:
+            raise ValueError("No sectors found in directional_results")
+        
+        # Determine subplot layout
+        n_periods = len(return_periods)
+        
+        if overlay:
+            # Single plot with all periods overlaid
+            if figsize is None:
+                figsize = (10, 10)
+            
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(111, projection='polar')
+            axes = ax
+            
+            # Plot each return period
+            for i, rp in enumerate(return_periods):
+                angles = []
+                values = []
+                
+                for sector_name in sector_names:
+                    result = directional_results[sector_name]
+                    if result.get('success', False) and 'return_values' in result:
+                        rv_dict = result['return_values']
+                        if rp in rv_dict and not np.isnan(rv_dict[rp]):
+                            angle_center = result['center_deg']
+                            angles.append(np.deg2rad(angle_center))
+                            values.append(rv_dict[rp])
+                
+                if angles:
+                    # Close the plot
+                    angles.append(angles[0])
+                    values.append(values[0])
+                    
+                    # Plot line
+                    ax.plot(angles, values, 'o-', linewidth=2.5, markersize=8,
+                           color=colors[i], label=f'{rp}-year', alpha=0.8)
+                    ax.fill(angles, values, alpha=0.15, color=colors[i])
+            
+            # Format
+            ax.set_theta_zero_location('N')
+            ax.set_theta_direction(-1)
+            if title is None:
+                title = 'Return Values by Direction'
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+            ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=10)
+            ax.grid(True, alpha=0.3)
+            
+            # Add value labels if requested
+            if show_values:
+                for i, rp in enumerate(return_periods):
+                    angles = []
+                    values = []
+                    
+                    for sector_name in sector_names:
+                        result = directional_results[sector_name]
+                        if result.get('success', False) and 'return_values' in result:
+                            rv_dict = result['return_values']
+                            if rp in rv_dict and not np.isnan(rv_dict[rp]):
+                                angle_center = result['center_deg']
+                                angles.append(np.deg2rad(angle_center))
+                                values.append(rv_dict[rp])
+                    
+                    if angles and i == 0:  # Only show values for first period to avoid clutter
+                        # Create text box per sector with all values
+                        for j, (angle, _) in enumerate(zip(angles, values)):
+                            sector_name = sector_names[j]
+                            result = directional_results[sector_name]
+                            rv_dict = result.get('return_values', {})
+                            
+                            # Build text with all return periods
+                            text_lines = []
+                            for rp_val in return_periods:
+                                if rp_val in rv_dict and not np.isnan(rv_dict[rp_val]):
+                                    text_lines.append(f'{rp_val}yr: {rv_dict[rp_val]:.1f}')
+                            
+                            if text_lines:
+                                text = '\n'.join(text_lines)
+                                # Position text slightly outside the plot
+                                max_val = max([v for v in values if not np.isnan(v)])
+                                r_pos = max_val * 1.15
+                                ax.text(angle, r_pos, text, ha='center', va='center',
+                                       fontsize=7, bbox=dict(boxstyle='round,pad=0.3',
+                                       facecolor='white', alpha=0.8, edgecolor='gray'))
+            
+        else:
+            # Separate subplots for each return period
+            if n_periods == 1:
+                # Single subplot
+                if figsize is None:
+                    figsize = (8, 8)
+                fig = plt.figure(figsize=figsize)
+                axes = [fig.add_subplot(111, projection='polar')]
+                nrows, ncols = 1, 1
+            elif n_periods == 2:
+                # Single row
+                if figsize is None:
+                    figsize = (14, 6)
+                fig, axes = plt.subplots(1, 2, figsize=figsize,
+                                        subplot_kw=dict(projection='polar'))
+                axes = axes.flatten()
+            else:
+                # Grid layout (2 rows)
+                if figsize is None:
+                    figsize = (14, 10)
+                nrows = 2
+                ncols = 2
+                fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
+                                        subplot_kw=dict(projection='polar'))
+                axes = axes.flatten()
+            
+            # Plot each return period
+            for i, rp in enumerate(return_periods):
+                ax = axes[i]
+                
+                # Get return values for this period
+                angles = []
+                values = []
+                
+                for sector_name in sector_names:
+                    result = directional_results[sector_name]
+                    if result.get('success', False) and 'return_values' in result:
+                        rv_dict = result['return_values']
+                        if rp in rv_dict and not np.isnan(rv_dict[rp]):
+                            angle_center = result['center_deg']
+                            angles.append(np.deg2rad(angle_center))
+                            values.append(rv_dict[rp])
+                
+                if not angles:
+                    ax.text(0.5, 0.5, 'No data available',
+                           ha='center', va='center', transform=ax.transAxes)
+                    continue
+                
+                # Close the plot
+                angles.append(angles[0])
+                values.append(values[0])
+                
+                # Plot
+                ax.plot(angles, values, 'o-', linewidth=2.5, markersize=8,
+                       color=colors[i], alpha=0.8)
+                ax.fill(angles, values, alpha=0.25, color=colors[i])
+                
+                # Format
+                ax.set_theta_zero_location('N')
+                ax.set_theta_direction(-1)
+                ax.set_title(f'{rp}-Year Return Value', fontsize=12,
+                           fontweight='bold', pad=20)
+                ax.set_xticks(np.deg2rad(np.arange(0, 360, 45)))
+                ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'])
+                ax.grid(True, alpha=0.3)
+                
+                # Add value labels if requested
+                if show_values:
+                    for angle, value in zip(angles[:-1], values[:-1]):
+                        if not np.isnan(value):
+                            ax.text(angle, value * 1.1, f'{value:.1f}',
+                                   ha='center', va='center', fontsize=8,
+                                   bbox=dict(boxstyle='round,pad=0.3',
+                                           facecolor='white', alpha=0.8))
+            
+            # Set main title
+            if title is None:
+                title = 'Return Values by Direction (m/s)'
+            fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
+        
+        plt.tight_layout()
+        
+        return fig, axes
+    
     def __repr__(self) -> str:
         """String representation of the analyzer."""
         dist_info = f", distribution={self.distribution_name}" if self.distribution_name else ""
