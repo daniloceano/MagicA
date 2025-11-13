@@ -92,14 +92,35 @@ Goodness-of-Fit Tests
 Stability Detection
 ~~~~~~~~~~~~~~~~~~~
 
-**stability_method** : str, default='aggregate'
-    Method for detecting stability points. Options:
+**stability_method** : str, default='cv'
+    Method for detecting when parameters and tests have stabilized. Options:
     
-    - ``'aggregate'``: Median-based detection with tolerance windows (default, robust)
-    - ``'detect'``: Coefficient of variation (CV) based detection
+    - ``'cv'``: Coefficient of Variation method (default, robust for erratic metrics)
+    - ``'kneedle'``: Kneedle algorithm for elbow detection (best for RMSE)
+    - ``'plateau'``: Relative gain heuristic (early "good enough" detection)
+    - ``'aggregate'``: Legacy median-based method (still supported)
     - ``None``: No stability detection
+    
+    **⭐ Recommendation**: Use ``'kneedle'`` for RMSE stability detection - it excels at finding the "point of diminishing returns" in smooth, converging metrics.
 
-    See `Stability Detection Methods`_ for detailed explanations.
+    See `Stability Detection Methods`_ for detailed explanations and selection guidance.
+
+**Method-Specific Parameters (via kwargs):**
+
+    For **CV method**:
+    
+    - ``window_size``: Number of consecutive sizes for validation (default: 25% of n_sizes)
+    - ``cv_threshold``: Maximum allowed coefficient of variation (default: 0.1)
+    
+    For **Kneedle method**:
+    
+    - ``smooth``: Whether to smooth curves before detection (default: True)
+    - ``smoothing_method``: 'savgol' (default) or 'spline'
+    
+    For **Plateau method**:
+    
+    - ``consecutive_points``: Number of consecutive points below tolerance (default: 3)
+    - ``relative_tolerance``: Maximum relative change threshold (default: 0.01, i.e., 1%)
 
 Visualization
 ~~~~~~~~~~~~~
@@ -148,68 +169,252 @@ Returns an ``xarray.Dataset`` containing:
 - ``sampling_method``: Sampling strategy used
 - ``bins_method``: Binning method used for chi-square test
 - ``stability_points``: Dictionary with detected stability information
+- ``recommended_size``: Sample size where primary metric stabilizes (None if not detected)
+- ``primary_metric``: The metric used for recommended_size (typically 'rmse')
+- ``stable_pvalue_ks``: KS test p-value at stability point (if 'ks' in tests)
+- ``stable_pvalue_chi2``: Chi-square p-value at stability point (if 'chi2' in tests)
+- ``stable_rmse``: RMSE value at stability point (if 'rmse' in tests)
+- ``n_repeats``: Number of repetitions performed
+- ``min_size``: Minimum sample size tested
+- ``max_size``: Maximum sample size tested
+- ``n_sizes``: Number of sample sizes tested
 - ``figure_path``: Path to saved figure (if ``fig_output_path`` was provided)
 - ``created_by``: Identifier for the method
 
 Stability Detection Methods
 ----------------------------
 
-Two methods are available for detecting when parameters and tests stabilize:
+MagicA provides three advanced methods for detecting when parameters and goodness-of-fit metrics have stabilized. Each method has specific strengths depending on the metric behavior.
 
-Aggregate Method (default)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CV Method (Coefficient of Variation)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **How it works:**
 
-1. For each parameter/test, computes the **median** across repeats for each sample size
-2. Uses a **sliding window** (default: 4 consecutive sizes) to check for stability
-3. Checks if the **range** (max - min) within the window is below a tolerance threshold
-4. For parameters: tolerance = 0.1% of the overall range
-5. For tests: tolerance = 0.1 (absolute)
+1. For each parameter/test, computes the **coefficient of variation** (CV = std/mean) across repeats at each sample size
+2. Uses a **sliding window** (default: 25% of n_sizes) to check for stability
+3. Checks if CV stays **below a threshold** (default: 0.1) for all sizes in the window
+4. Returns the first size where this condition is met
+
+**Mathematical formula:**
+
+.. math::
+
+    CV_n = \\frac{\\sigma_n}{\\mu_n}
+
+Where:
+- :math:`\\sigma_n` = standard deviation across repeats at size n
+- :math:`\\mu_n` = mean value across repeats at size n
 
 **Advantages:**
 
-- Robust to outliers (uses median)
-- Clear interpretation (looks for flat regions)
+- Robust to erratic metrics (especially p-values)
+- Provides quantitative measure of variability
+- Good for assessing precision of estimates
 - Works well with any number of repeats
 
+**Disadvantages:**
+
+- May be conservative (detects stability later than other methods)
+- Less sensitive to smooth convergence patterns
+
+**Parameters:**
+
+- ``window_size``: Number of consecutive sizes for validation (default: max(2, n_sizes // 4))
+- ``cv_threshold``: Maximum allowed CV (default: 0.1)
+
 **Result format:**
 
 .. code-block:: python
 
     stability_points = {
-        'rmse': {'size': 600, 'index': 3, 'cv_at_stability': None},
-        'param_0': {'size': 800, 'index': 4, 'cv_at_stability': None}
+        'rmse': {
+            'size': 800,
+            'index': 4,
+            'cv_at_stability': 0.087,
+            'smoothed_curve': None,
+            'method': 'cv'
+        }
     }
 
-**When to use:** Default choice for most analyses.
+**When to use:** 
+- When working with erratic p-values (KS, Chi-square)
+- When you need quantitative variability assessment
+- When conservative estimates are preferred
 
-Detect Method
-~~~~~~~~~~~~~
+Kneedle Method (Elbow Detection)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **How it works:**
 
-1. For each parameter/test, computes the **coefficient of variation** (CV = std/mean) across repeats
-2. Checks if CV stays below a threshold (default: 0.1) for a consecutive window of sizes
-3. Window size is typically 25% of the number of sizes tested
-4. Saves the CV value at the stability point
+1. **Normalizes** the curve to [0, 1] range
+2. Computes the **reference line** connecting first and last points
+3. Calculates **perpendicular distance** from each point to the reference line
+4. The **knee/elbow** is at the point with maximum distance
+5. Optional: **smooths the curve** before detection using Savitzky-Golay filter or spline
+
+**Mathematical formula:**
+
+.. math::
+
+    D_i = |y_i - (y_0 + (y_n - y_0) \\cdot \\frac{i}{n})|
+
+Where:
+- :math:`D_i` = distance from reference line at point i
+- :math:`y_i` = normalized curve value at point i
+- :math:`y_0, y_n` = first and last curve values
 
 **Advantages:**
 
-- Provides quantitative measure of variability (CV)
-- Good for assessing precision of estimates
-- Sensitive to early stabilization
+- **Optimal for RMSE**: Excels at finding "point of diminishing returns" in smooth curves
+- Clear mathematical definition of "elbow"
+- Automatic curve direction detection
+- Smoothing reduces noise sensitivity
+- Based on published algorithm (Satopää et al., 2011)
+
+**Disadvantages:**
+
+- Requires relatively smooth convergence
+- May not work well with highly erratic metrics
+
+**Parameters:**
+
+- ``smooth``: Whether to smooth before detection (default: True, recommended)
+- ``smoothing_method``: 'savgol' (default, preserves features) or 'spline'
 
 **Result format:**
 
 .. code-block:: python
 
     stability_points = {
-        'rmse': {'size': 600, 'index': 3, 'cv_at_stability': 0.087},
-        'param_0': {'size': 800, 'index': 4, 'cv_at_stability': 0.095}
+        'rmse': {
+            'size': 600,
+            'index': 3,
+            'cv_at_stability': None,
+            'smoothed_curve': array([...]),  # If smoothing was used
+            'method': 'kneedle'
+        }
     }
 
-**When to use:** When you need to report the coefficient of variation at stability.
+**When to use:**
+- **⭐ RECOMMENDED for RMSE stability detection**
+- When metrics show smooth, monotonic convergence
+- When you want to find the "sweet spot" of diminishing returns
+- For production analyses requiring objective elbow detection
+
+**Reference:**
+
+Satopää, V., Albrecht, J., Irwin, D., & Raghavan, B. (2011). *Finding a "Kneedle" in a Haystack: Detecting Knee Points in System Behavior*. 2011 31st International Conference on Distributed Computing Systems Workshops, 166-171.
+
+Plateau Method (Relative Gain Heuristic)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**How it works:**
+
+1. Computes **relative change** between consecutive points:
+   
+   .. math::
+   
+       \\Delta_i = \\frac{|y_{i-1} - y_i|}{|y_{i-1}|}
+
+2. Checks if relative change stays **below tolerance** for L consecutive points
+3. Returns the first point where this "plateau" condition is met
+
+**Mathematical formula:**
+
+Stability detected when:
+
+.. math::
+
+    \\Delta_i < \\epsilon \\text{ for } L \\text{ consecutive points}
+
+Where:
+- :math:`\\Delta_i` = relative change at point i
+- :math:`\\epsilon` = relative tolerance (default: 0.01, i.e., 1%)
+- :math:`L` = consecutive points threshold (default: 3)
+
+**Advantages:**
+
+- Early detection of "good enough" stabilization
+- Intuitive interpretation (% improvement)
+- Fast - no smoothing required
+- Good for early stopping in iterative analyses
+
+**Disadvantages:**
+
+- May detect premature plateaus
+- Sensitive to parameter tuning
+- Less robust to noise than other methods
+
+**Parameters:**
+
+- ``consecutive_points``: Number of consecutive points below tolerance (default: 3)
+- ``relative_tolerance``: Maximum relative change threshold (default: 0.01)
+
+**Result format:**
+
+.. code-block:: python
+
+    stability_points = {
+        'rmse': {
+            'size': 500,
+            'index': 2,
+            'cv_at_stability': None,
+            'smoothed_curve': None,
+            'method': 'plateau'
+        }
+    }
+
+**When to use:**
+- When computational budget is limited
+- For early "good enough" detection
+- When slight improvements beyond plateau are acceptable
+- In iterative analyses where early stopping is beneficial
+
+Method Selection Guide
+~~~~~~~~~~~~~~~~~~~~~~
+
+Choose the appropriate method based on your metric and goals:
+
++----------------+------------------+---------------------+-------------------------+
+| Method         | Best For         | Strengths           | Typical Use Case        |
++================+==================+=====================+=========================+
+| **Kneedle**    | RMSE, converging | Objective elbow     | **Production RMSE**     |
+|                | parameters       | detection, smooth   | **analysis**            |
+|                |                  | curves              | **(RECOMMENDED)**       |
++----------------+------------------+---------------------+-------------------------+
+| **CV**         | P-values (KS,    | Robust to noise,    | P-value stability,      |
+|                | Chi-square)      | quantifies          | conservative estimates  |
+|                |                  | variability         |                         |
++----------------+------------------+---------------------+-------------------------+
+| **Plateau**    | Early detection, | Fast, intuitive,    | Quick exploration,      |
+|                | limited budget   | early stopping      | iterative tuning        |
++----------------+------------------+---------------------+-------------------------+
+| **Aggregate**  | Legacy analyses  | Simple, robust      | Backward compatibility  |
+|                |                  |                     |                         |
++----------------+------------------+---------------------+-------------------------+
+
+**Recommended Workflow:**
+
+.. code-block:: python
+
+    # 1. Use Kneedle for RMSE (most reliable)
+    results_rmse = processor.monte_carlo_fit(
+        tests=['rmse'],
+        stability_method='kneedle',
+        smooth=True
+    )
+    
+    # 2. Use CV for p-values (robust to noise)
+    results_pvalues = processor.monte_carlo_fit(
+        tests=['ks', 'chi2'],
+        stability_method='cv',
+        cv_threshold=0.15  # Can relax for p-values
+    )
+    
+    # 3. Compare stability points
+    rmse_stable = results_rmse.attrs['recommended_size']
+    print(f"RMSE stable at n = {rmse_stable} (MOST RELIABLE)")
 
 Interpreting Stability Points
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -218,13 +423,35 @@ Each stability point contains:
 
 - ``size``: The sample size where stability is first detected (``None`` if not detected)
 - ``index``: The index in the ``sizes`` list (``None`` if not detected)
-- ``cv_at_stability``: Coefficient of variation at stability (only for ``'detect'`` method)
+- ``cv_at_stability``: Coefficient of variation at stability (only for ``'cv'`` method)
+- ``smoothed_curve``: Smoothed curve data (only for ``'kneedle'`` method with smoothing)
+- ``method``: Name of the detection method used
 
-If ``size`` is ``None``, stability was not detected in the tested range. This can happen when:
+**Accessing stability information:**
 
-- The tested sample sizes are too small
-- The parameter/test has high variability
-- More repeats are needed (increase ``n_repeats``)
+.. code-block:: python
+
+    # Get recommended size (based on primary metric, usually RMSE)
+    recommended_n = results.attrs['recommended_size']
+    primary_metric = results.attrs['primary_metric']
+    
+    if recommended_n:
+        print(f"✓ {primary_metric.upper()} stable at n = {recommended_n}")
+        
+        # Get quality metrics at stable point
+        if 'stable_rmse' in results.attrs:
+            print(f"  RMSE at stable point: {results.attrs['stable_rmse']:.4f}")
+        if 'stable_pvalue_ks' in results.attrs:
+            print(f"  KS p-value at stable point: {results.attrs['stable_pvalue_ks']:.4f}")
+    else:
+        print("✗ No stability detected - try larger sample sizes")
+
+**If stability is not detected:**
+
+- The tested sample sizes are too small - increase ``max_size``
+- The metric has high variability - increase ``n_repeats``
+- The threshold is too strict - relax method-specific parameters
+- The data distribution may not be appropriate
 
 Recommended Practices
 ---------------------
@@ -270,18 +497,34 @@ Accessing Stability Information
 
 .. code-block:: python
 
-    # Get stability points
-    stability = results.attrs['stability_points']
+    # Get recommended size (based on primary metric, typically RMSE)
+    recommended_n = results.attrs['recommended_size']
+    primary_metric = results.attrs['primary_metric']
     
-    # Recommended size (based on RMSE)
-    rmse_stability = stability['rmse']
-    optimal_size = rmse_stability['size']
-    
-    if optimal_size is not None:
-        print(f"RMSE stabilizes at n = {optimal_size}")
-        print(f"This is the recommended minimum sample size")
+    if recommended_n is not None:
+        print(f"✓ {primary_metric.upper()} stabilizes at n = {recommended_n}")
+        print(f"  This is the recommended minimum sample size")
+        
+        # Get quality metrics at the stable point
+        print(f"\nMetrics at stable point (n = {recommended_n}):")
+        if 'stable_rmse' in results.attrs:
+            print(f"  RMSE: {results.attrs['stable_rmse']:.4f}")
+        if 'stable_pvalue_ks' in results.attrs:
+            print(f"  KS p-value: {results.attrs['stable_pvalue_ks']:.4f}")
+        if 'stable_pvalue_chi2' in results.attrs:
+            print(f"  Chi-square p-value: {results.attrs['stable_pvalue_chi2']:.4f}")
     else:
-        print("No clear stability detected - try larger sample sizes")
+        print("✗ No clear stability detected - try larger sample sizes or more repeats")
+    
+    # Access individual stability points for all metrics
+    stability = results.attrs['stability_points']
+    for metric, info in stability.items():
+        size = info['size']
+        method = info['method']
+        if size:
+            print(f"{metric}: stable at n = {size} (method: {method})")
+            if info['cv_at_stability'] is not None:
+                print(f"  CV at stability: {info['cv_at_stability']:.3f}")
 
 Complete Example
 ----------------
@@ -296,35 +539,39 @@ Complete Example
     processor = ma.read_data(data)
     processor.fit_distribution('weibull_min')
     
-    # Run comprehensive Monte Carlo analysis
+    # Run comprehensive Monte Carlo analysis with Kneedle method
     results = processor.monte_carlo_fit(
-        sizes=[100, 200, 400, 600, 800, 1000, 1500, 2000],
+        sizes=[100, 200, 400, 600, 800, 1000, 1500, 2000, 3000, 4000],
         n_repeats=50,
         tests=['ks', 'chi2', 'rmse'],  # Include RMSE!
-        stability_method='aggregate',
+        stability_method='kneedle',     # Use Kneedle for RMSE
+        smooth=True,                    # Smooth curves before detection
         sampling='random',
         seed=42,
         fig_output_path='monte_carlo_analysis.png'
     )
     
-    # Check stability
+    # Check recommended size (based on RMSE with Kneedle)
+    recommended_n = results.attrs['recommended_size']
+    primary_metric = results.attrs['primary_metric']
+    
+    print(f"⭐ {primary_metric.upper()} stabilizes at n = {recommended_n} (RECOMMENDED)")
+    print(f"   RMSE at stable point: {results.attrs['stable_rmse']:.4f}")
+    print(f"   KS p-value at stable point: {results.attrs['stable_pvalue_ks']:.4f}")
+    
+    # Check all stability points
     stability = results.attrs['stability_points']
-    
-    # RMSE-based recommendation (most reliable)
-    rmse_size = stability['rmse']['size']
-    print(f"⭐ RMSE stabilizes at n = {rmse_size} (RECOMMENDED)")
-    
-    # Other metrics
-    for metric in ['ks', 'chi2', 'param_0']:
-        size = stability[metric]['size']
+    print("\nAll stability points:")
+    for metric, info in stability.items():
+        size = info['size']
+        method = info['method']
         if size:
-            print(f"   {metric}: stabilizes at n = {size}")
+            print(f"   {metric}: n = {size} (method: {method})")
         else:
             print(f"   {metric}: no clear stability detected")
     
     # Use the recommended size for robust inference
-    optimal_size = rmse_size if rmse_size else 1000
-    print(f"\nRecommended subsample size: {optimal_size}")
+    print(f"\nRecommended subsample size for production: {recommended_n}")
 
 Sampling Strategies
 -------------------

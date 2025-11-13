@@ -5,6 +5,8 @@ Statistical distribution fitting and adjustment for wind data
 from matplotlib.pylab import seed
 import numpy as np
 from scipy import stats
+from scipy.interpolate import UnivariateSpline
+from scipy.signal import savgol_filter
 import xarray as xr
 from typing import Union, Dict, Any, Optional, Tuple, List
 import warnings
@@ -600,7 +602,7 @@ class MagicAdjuster:
         sizes: Optional[List[int]] = None,
         n_repeats: int = 20,
         tests: List[str] = ['ks'],
-        stability_method: str = 'aggregate',
+        stability_method: str = 'cv',
         fig_output_path: Optional[str] = None,
         plot_type: str = 'series',
         sampling: str = 'random',
@@ -627,6 +629,15 @@ class MagicAdjuster:
             Number of subsamples (repetitions) for each size.
         tests : list[str], default=['ks']
             Goodness-of-fit tests to perform. Options: 'ks', 'chi2', 'rmse'.
+            **Recommendation**: Always include 'rmse' for best stability detection.
+        stability_method : str, default='cv'
+            Method for detecting stability points. Options:
+            - 'cv': Coefficient of variation approach (default, robust)
+            - 'kneedle': Kneedle algorithm on median curves (best for RMSE)
+            - 'plateau': Relative gain heuristic (good for converging parameters)
+            - 'aggregate': Median-based detection with tolerance windows (legacy)
+            - 'detect': Alias for 'cv' (backward compatibility)
+            - None or 'none': Skip stability detection
         fig_output_path : str, optional
             When provided, a 2x3 summary figure is generated and saved to this
             path. The Dataset attribute 'figure_path' will contain the path.
@@ -649,16 +660,33 @@ class MagicAdjuster:
             (no refitting). Use only for scenarios evaluating GOF with known
             parameters. If None (default), each subsample is refitted.
         **kwargs
+            Additional parameters:
+            
             - bins : int or str, default='doane'
                 Binning for chi-square test.
             - fit_kwargs : dict
                 Passed to fit_distribution for parameter constraints (e.g.,
                 fit_kwargs={'floc': 0}).
-            - stability_method : str, default='detect'
-                Which stability detection approach to use:
-                - 'detect' : use internal `_detect_stability_points` on numeric arrays (default)
-                - 'aggregate' : collect per-repeat results and use `_aggregate_and_detect_stability`
-                - 'none' : skip stability detection
+            
+            Stability detection parameters (method-specific):
+            
+            For 'cv' method:
+                - window_size : int, default=len(sizes)//4
+                    Window size for CV consistency check
+                - cv_threshold : float, default=0.1
+                    Maximum acceptable coefficient of variation (10%)
+            
+            For 'kneedle' method:
+                - smooth : bool, default=True
+                    Whether to smooth curves before detection
+                - smoothing_method : str, default='savgol'
+                    Smoothing method: 'savgol' or 'spline'
+            
+            For 'plateau' method:
+                - consecutive_points : int, default=3
+                    Number of consecutive points for plateau (L parameter)
+                - relative_tolerance : float, default=0.01
+                    Maximum relative change threshold (Δ parameter, 1%)
 
         Returns
         -------
@@ -676,25 +704,41 @@ class MagicAdjuster:
             - **rmse** : Root mean square error values
             
             Attributes include:
+            
             - **distribution** : Distribution name
             - **original_data_size** : Size of original dataset
             - **sampling_method** : Sampling strategy used
             - **bins_method** : Binning method for chi-square test
+            - **stability_method** : Detection method used
             - **stability_points** : Detected stability points per variable
+            - **recommended_size** : Recommended sample size (from primary metric)
+            - **primary_metric** : Metric used for recommendation (typically 'rmse')
+            - **stable_pvalue_ks** : KS p-value at stable size (if applicable)
+            - **stable_pvalue_chi2** : Chi-square p-value at stable size (if applicable)
+            - **stable_rmse** : RMSE at stable size (if applicable)
             - **figure_path** : Path to saved 2x3 summary figure (only if generated)
+            - **created_by** : Method identifier
 
         Examples
         --------
-        >>> # Basic usage - each subsample gets independent fit
-        >>> results = adjuster.monte_carlo_fit(n_repeats=50, tests=['ks', 'chi2'])
-        >>> print(results.sizes.values)  # Sample sizes tested
-        >>> ks_pvalues = results['ks_pvalue']  # Access KS p-values directly
+        >>> # Basic usage with recommended settings (includes RMSE!)
+        >>> results = adjuster.monte_carlo_fit(
+        ...     n_repeats=50, 
+        ...     tests=['ks', 'chi2', 'rmse'],
+        ...     stability_method='kneedle'  # Best for RMSE
+        ... )
+        
+        >>> # Access stability information
+        >>> stability = results.attrs['stability_points']
+        >>> recommended_size = results.attrs['recommended_size']
+        >>> print(f"RMSE stabilizes at n={stability['rmse']['size']}")
         
         >>> # Use fit constraints (e.g., fix location for Weibull)
         >>> results = adjuster.monte_carlo_fit(
         ...     n_repeats=100, 
-        ...     tests=['chi2', 'ks'],
-        ...     fit_kwargs={'floc': 0}  # Fix location parameter
+        ...     tests=['rmse', 'ks'],
+        ...     stability_method='plateau',
+        ...     fit_kwargs={'floc': 0}
         ... )
         
         >>> # Use pre-calculated parameters (bypass fitting entirely)
@@ -705,13 +749,12 @@ class MagicAdjuster:
         ...     tests=['chi2', 'ks']
         ... )
         
-        >>> # Select specific size and calculate statistics
-        >>> size_200_data = results.sel(sizes=200)
-        >>> param_medians = results['param_0'].median(dim='repeats')
-        
-        >>> # Check stability points
-        >>> stability = results.attrs['stability_points']
-        >>> print(f"KS test stabilizes at size: {stability['ks_pvalue']['size']}")
+        >>> # Generate figure with automatic stability detection
+        >>> results = adjuster.monte_carlo_fit(
+        ...     tests=['ks', 'rmse'],
+        ...     stability_method='kneedle',
+        ...     fig_output_path='mc_analysis.png'
+        ... )
 
         Notes
         -----
@@ -720,6 +763,23 @@ class MagicAdjuster:
         By default, each subsample gets an independent fit to evaluate how parameter
         estimates change with sample size. This is the correct approach for stability
         analysis since parameter estimation quality depends on sample size.
+        
+        **Stability Detection Methods:**
+        
+        1. **CV (Coefficient of Variation)**: Default method, robust and works for all
+           variables. Looks for when std/mean becomes consistently small.
+        
+        2. **Kneedle**: Best for RMSE and converging parameters. Finds the "elbow" point
+           where improvement rate changes. Requires curve smoothing.
+        
+        3. **Plateau**: Good for metrics with clear convergence. Uses relative gain
+           heuristic (Δᵢ = |y(i-1) - y(i)| / |y(i-1)|).
+        
+        **Choosing the Right Method:**
+        
+        - Use **'kneedle'** with **RMSE** for clearest stability detection
+        - Use **'cv'** for general-purpose analysis
+        - Use **'plateau'** when you expect clear convergence behavior
         
         **Parameter Constraints:**
         
@@ -730,17 +790,6 @@ class MagicAdjuster:
         
         Use `distribution_params` only when you want to evaluate goodness-of-fit
         with known/fixed parameters across all sample sizes, bypassing fitting entirely.
-        
-        **Stability Detection:**
-        
-        The method detects stability by looking for sample sizes where:
-        
-        1. Test statistics (p-values) become stable across sizes
-        2. Parameter estimates converge to consistent values
-        
-        A moving window approach identifies the first size where values
-        remain stable within a tolerance threshold. Stability points are
-        stored in the Dataset attributes for easy access.
         """
 
         # Extract kwargs
@@ -899,34 +948,106 @@ class MagicAdjuster:
             'repeats': np.arange(n_repeats)
         }
 
-        # Detect stability points
+        # Detect stability points using selected method
         stability_points = None
         agg_summary = None
-        if stability_method == 'detect':
-            stability_points = self._detect_stability_points(data_vars, sizes)
-        elif stability_method == 'aggregate' and aggregate_results is not None:
+        
+        # Normalize stability_method name
+        if stability_method is None or stability_method.lower() == 'none':
+            # Skip stability detection
+            stability_points = {k: {'size': None, 'index': None, 'cv_at_stability': None, 'smoothed_curve': None, 'method': 'none'} 
+                              for k in list(param_arrays.keys()) + list(test_arrays.keys())}
+        elif stability_method.lower() == 'detect':
+            # Backward compatibility: 'detect' maps to 'cv'
+            stability_points = self._detect_stability_unified(data_vars, sizes, method='cv', **kwargs)
+        elif stability_method.lower() in ['cv', 'kneedle', 'plateau']:
+            # Use unified detection with specified method
+            stability_points = self._detect_stability_unified(data_vars, sizes, method=stability_method.lower(), **kwargs)
+        elif stability_method.lower() == 'aggregate' and aggregate_results is not None:
+            # Legacy aggregate method
             agg_summary, _, _ = self._aggregate_and_detect_stability(aggregate_results, sizes, test_list, max_params)
             # Convert agg_summary to stability_points format used by plotting
             stability_points = {}
             # Tests
             for test in agg_summary.get('tests', {}):
                 inf_idx = agg_summary['tests'][test].get('inflection_index')
-                stability_points[test] = {'size': int(sizes[inf_idx]) if inf_idx is not None else None, 'index': int(inf_idx) if inf_idx is not None else None, 'cv_at_stability': None}
+                stability_points[test] = {
+                    'size': int(sizes[inf_idx]) if inf_idx is not None else None,
+                    'index': int(inf_idx) if inf_idx is not None else None,
+                    'cv_at_stability': None,
+                    'smoothed_curve': None,
+                    'method': 'aggregate'
+                }
             # Params (use params inflection)
             p_inf_idx = agg_summary['params'].get('inflection_index')
-            stability_points['param_0'] = {'size': int(sizes[p_inf_idx]) if p_inf_idx is not None else None, 'index': int(p_inf_idx) if p_inf_idx is not None else None, 'cv_at_stability': None}
+            stability_points['param_0'] = {
+                'size': int(sizes[p_inf_idx]) if p_inf_idx is not None else None,
+                'index': int(p_inf_idx) if p_inf_idx is not None else None,
+                'cv_at_stability': None,
+                'smoothed_curve': None,
+                'method': 'aggregate'
+            }
         else:
-            stability_points = {k: {'size': None, 'index': None, 'cv_at_stability': None} for k in list(param_arrays.keys()) + list(test_arrays.keys())}
-
+            raise ValueError(f"Unknown stability_method: {stability_method}. "
+                           f"Options: 'cv', 'kneedle', 'plateau', 'aggregate', 'detect', 'none'")
+        
+        # Determine recommended size and primary metric
+        # Priority: RMSE > KS > Chi2 > param_0
+        recommended_size = None
+        primary_metric = None
+        
+        for metric in ['rmse', 'ks_pvalue', 'chi2_pvalue', 'param_0']:
+            if metric in stability_points and stability_points[metric]['size'] is not None:
+                recommended_size = stability_points[metric]['size']
+                primary_metric = metric
+                break
+        
+        # If still no recommendation, use largest size
+        if recommended_size is None:
+            recommended_size = int(sizes[-1])
+            primary_metric = 'max_size'
+        
+        # Get p-values and metrics at stable size for reporting
+        stable_idx = None
+        for metric_name, info in stability_points.items():
+            if info['size'] == recommended_size:
+                stable_idx = info['index']
+                break
+        
+        stable_pvalue_ks = None
+        stable_pvalue_chi2 = None
+        stable_rmse = None
+        
+        if stable_idx is not None:
+            if 'ks_pvalue' in data_vars:
+                ks_at_stable = data_vars['ks_pvalue'][stable_idx, :]
+                stable_pvalue_ks = float(np.nanmedian(ks_at_stable))
+            if 'chi2_pvalue' in data_vars:
+                chi2_at_stable = data_vars['chi2_pvalue'][stable_idx, :]
+                stable_pvalue_chi2 = float(np.nanmedian(chi2_at_stable))
+            if 'rmse' in data_vars:
+                rmse_at_stable = data_vars['rmse'][stable_idx, :]
+                stable_rmse = float(np.nanmedian(rmse_at_stable))
+        
         # Optionally create & save figure
         figure_path = None
         if fig_output_path is not None:
             try:
-                fig = self._create_monte_carlo_figure(data_vars, sizes, plot_type, stability_points)
+                fig = self._create_monte_carlo_figure(
+                    data_vars, sizes, plot_type, stability_points,
+                    distribution_name=self.distribution_name or str(self.fitted_distribution),
+                    max_size=int(sizes[-1]),
+                    recommended_size=recommended_size,
+                    primary_metric=primary_metric,
+                    stable_pvalue_ks=stable_pvalue_ks,
+                    stable_pvalue_chi2=stable_pvalue_chi2,
+                    stable_rmse=stable_rmse
+                )
                 if fig is not None:
                     fig.savefig(fig_output_path, dpi=150, bbox_inches='tight')
                     figure_path = fig_output_path
-            except Exception:
+            except Exception as e:
+                warnings.warn(f"Failed to create figure: {e}")
                 figure_path = None
 
         # Create Dataset (all numeric data only)
@@ -938,7 +1059,17 @@ class MagicAdjuster:
                 'original_data_size': N,
                 'sampling_method': sampling,
                 'bins_method': bins,
+                'stability_method': stability_method,
                 'stability_points': stability_points,
+                'recommended_size': recommended_size,
+                'primary_metric': primary_metric,
+                'stable_pvalue_ks': stable_pvalue_ks,
+                'stable_pvalue_chi2': stable_pvalue_chi2,
+                'stable_rmse': stable_rmse,
+                'n_repeats': n_repeats,
+                'min_size': int(sizes[0]),
+                'max_size': int(sizes[-1]),
+                'n_sizes': len(sizes),
                 'figure_path': figure_path,
                 'created_by': 'MagicAdjuster.monte_carlo_fit'
             }
@@ -946,56 +1077,368 @@ class MagicAdjuster:
 
         return ds
 
-    def _detect_stability_points(self, data_vars: Dict[str, np.ndarray], sizes: np.ndarray) -> Dict[str, Dict[str, Any]]:
+    def _smooth_curve(self, x: np.ndarray, y: np.ndarray, method: str = 'savgol') -> np.ndarray:
         """
-        Detect stability points for each variable using coefficient of variation.
+        Smooth a curve for stability detection.
         
-        A variable is considered stable when its coefficient of variation
-        (std/mean) across repeats becomes consistently low.
+        Parameters
+        ----------
+        x : np.ndarray
+            X values (sample sizes)
+        y : np.ndarray
+            Y values (metric to smooth)
+        method : str, default='savgol'
+            Smoothing method: 'savgol' (Savitzky-Golay) or 'spline'
+            
+        Returns
+        -------
+        np.ndarray
+            Smoothed y values
+            
+        Notes
+        -----
+        Savitzky-Golay filter is preferred for preserving features while
+        smoothing noise. Spline interpolation provides smoother curves but
+        may over-smooth important features.
+        """
+        # Remove NaN values
+        valid_mask = ~(np.isnan(x) | np.isnan(y))
+        if np.sum(valid_mask) < 4:
+            return y  # Not enough points to smooth
+            
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
+        
+        if method == 'savgol':
+            # Savitzky-Golay filter - preserves features
+            window_length = min(len(x_valid), max(5, len(x_valid) // 3))
+            if window_length % 2 == 0:
+                window_length -= 1  # Must be odd
+            poly_order = min(3, window_length - 1)
+            
+            try:
+                y_smooth = savgol_filter(y_valid, window_length, poly_order)
+                # Map back to original x positions
+                result = np.full_like(y, np.nan)
+                result[valid_mask] = y_smooth
+                return result
+            except:
+                return y
+                
+        elif method == 'spline':
+            # Spline interpolation - smoother but may over-smooth
+            try:
+                # Use spline with automatic smoothing
+                spl = UnivariateSpline(x_valid, y_valid, s=len(x_valid) * 0.1, k=3)
+                result = np.full_like(y, np.nan)
+                result[valid_mask] = spl(x_valid)
+                return result
+            except:
+                return y
+        else:
+            return y
+
+    def _kneedle_detection(
+        self, 
+        x: np.ndarray, 
+        y: np.ndarray, 
+        smooth: bool = True,
+        smoothing_method: str = 'savgol'
+    ) -> Tuple[Optional[int], Optional[np.ndarray]]:
+        """
+        Detect elbow/knee point using the Kneedle algorithm.
+        
+        Based on Satopää et al. (2011): "Finding a 'Kneedle' in a Haystack:
+        Detecting Knee Points in System Behavior"
+        
+        Parameters
+        ----------
+        x : np.ndarray
+            Sample sizes (must be monotonic)
+        y : np.ndarray
+            Metric values (e.g., RMSE, median parameter)
+        smooth : bool, default=True
+            Whether to smooth the curve before detection
+        smoothing_method : str, default='savgol'
+            Method for smoothing: 'savgol' or 'spline'
+            
+        Returns
+        -------
+        knee_idx : int or None
+            Index of detected knee point, or None if not found
+        y_smooth : np.ndarray or None
+            Smoothed curve if smoothing was applied, else None
+            
+        Notes
+        -----
+        The algorithm:
+        1. Normalizes x and y to [0,1]
+        2. Computes difference between curve and reference line
+        3. Finds maximum difference (the "knee")
+        
+        Works best for decreasing metrics (RMSE) or converging parameters.
+        """
+        # Remove NaN values
+        valid_mask = ~(np.isnan(x) | np.isnan(y))
+        if np.sum(valid_mask) < 3:
+            return None, None
+            
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
+        
+        # Smooth if requested
+        y_smooth = None
+        if smooth:
+            y_work = self._smooth_curve(x, y, method=smoothing_method)
+            y_work_valid = y_work[valid_mask]
+            y_smooth = y_work
+        else:
+            y_work_valid = y_valid
+        
+        # Normalize to [0, 1]
+        x_norm = (x_valid - x_valid.min()) / (x_valid.max() - x_valid.min() + 1e-10)
+        y_norm = (y_work_valid - y_work_valid.min()) / (y_work_valid.max() - y_work_valid.min() + 1e-10)
+        
+        # Calculate reference line (straight line from start to end)
+        y_ref = np.linspace(y_norm[0], y_norm[-1], len(y_norm))
+        
+        # Calculate differences (for decreasing curves, use y_ref - y_norm)
+        # For increasing curves, use y_norm - y_ref
+        # Auto-detect curve direction
+        if y_norm[-1] < y_norm[0]:
+            # Decreasing curve (e.g., RMSE)
+            differences = y_ref - y_norm
+        else:
+            # Increasing curve (e.g., p-values sometimes)
+            differences = y_norm - y_ref
+        
+        # Find maximum difference (the knee)
+        if len(differences) == 0:
+            return None, y_smooth
+            
+        knee_idx_local = np.argmax(differences)
+        
+        # Map back to original indices
+        valid_indices = np.where(valid_mask)[0]
+        knee_idx = valid_indices[knee_idx_local]
+        
+        return int(knee_idx), y_smooth
+
+    def _plateau_detection(
+        self, 
+        x: np.ndarray, 
+        y: np.ndarray,
+        consecutive_points: int = 3,
+        relative_tolerance: float = 0.01
+    ) -> Optional[int]:
+        """
+        Detect plateau using relative gain heuristic.
+        
+        Based on the concept that stability is reached when the relative
+        improvement between consecutive sample sizes becomes negligible.
+        
+        Parameters
+        ----------
+        x : np.ndarray
+            Sample sizes
+        y : np.ndarray  
+            Metric values (medians across repeats)
+        consecutive_points : int, default=3
+            Number of consecutive points that must satisfy the criterion
+            (L parameter in the heuristic formula)
+        relative_tolerance : float, default=0.01
+            Maximum acceptable relative change (Δ parameter, default 1%)
+            
+        Returns
+        -------
+        plateau_idx : int or None
+            Index where plateau starts, or None if not found
+            
+        Notes
+        -----
+        The algorithm computes relative gain:
+            Δᵢ = |RMSE(nᵢ₋₁) - RMSE(nᵢ)| / RMSE(nᵢ₋₁)
+        
+        Plateau is detected when Δᵢ < threshold for L consecutive points.
+        
+        Works best for decreasing metrics (RMSE) or parameter convergence.
+        """
+        # Remove NaN values
+        valid_mask = ~(np.isnan(x) | np.isnan(y))
+        if np.sum(valid_mask) < consecutive_points + 1:
+            return None
+            
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
+        
+        # Calculate relative changes
+        rel_changes = []
+        for i in range(1, len(y_valid)):
+            if y_valid[i-1] != 0:
+                rel_change = abs(y_valid[i] - y_valid[i-1]) / abs(y_valid[i-1])
+                rel_changes.append(rel_change)
+            else:
+                rel_changes.append(np.inf)
+        
+        # Find first point where relative changes stay below tolerance
+        # for consecutive_points consecutive measurements
+        for i in range(len(rel_changes) - consecutive_points + 1):
+            window = rel_changes[i:i + consecutive_points]
+            if all(rc < relative_tolerance for rc in window if not np.isinf(rc)):
+                # Map back to original indices
+                valid_indices = np.where(valid_mask)[0]
+                # Return index after which the plateau starts (i+1 because we skip first point)
+                plateau_idx = valid_indices[i + 1]
+                return int(plateau_idx)
+        
+        return None
+
+    def _detect_stability_unified(
+        self,
+        data_vars: Dict[str, np.ndarray],
+        sizes: np.ndarray,
+        method: str = 'cv',
+        **kwargs
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Unified stability detection supporting multiple methods.
+        
+        Parameters
+        ----------
+        data_vars : dict
+            Dictionary of variable names to (sizes x repeats) arrays
+        sizes : np.ndarray
+            Sample sizes tested
+        method : str, default='cv'
+            Detection method:
+            - 'cv': Coefficient of variation (original method)
+            - 'kneedle': Kneedle algorithm on median curve
+            - 'plateau': Relative gain heuristic on median curve
+        **kwargs
+            Method-specific parameters:
+            - For 'cv': window_size, cv_threshold
+            - For 'kneedle': smooth, smoothing_method
+            - For 'plateau': consecutive_points, relative_tolerance
+            
+        Returns
+        -------
+        dict
+            Stability points for each variable with keys:
+            - 'size': Sample size where stability detected (or None)
+            - 'index': Index in sizes array (or None)
+            - 'cv_at_stability': CV value if method='cv' (or None)
+            - 'smoothed_curve': Smoothed median curve if applicable
+            - 'method': Detection method used
+            
+        Notes
+        -----
+        Different methods work better for different metrics:
+        - 'cv': General purpose, works for all variables
+        - 'kneedle': Best for decreasing metrics (RMSE) or converging parameters
+        - 'plateau': Best for metrics with clear convergence plateaus
         """
         stability_points = {}
-        window_size = max(2, len(sizes) // 4)  # Use 25% of sizes as window
-        cv_threshold = 0.1  # 10% coefficient of variation threshold
+        
+        # Extract kwargs for each method
+        # CV method
+        window_size = kwargs.get('window_size', max(2, len(sizes) // 4))
+        cv_threshold = kwargs.get('cv_threshold', 0.1)
+        
+        # Kneedle method
+        smooth = kwargs.get('smooth', True)
+        smoothing_method = kwargs.get('smoothing_method', 'savgol')
+        
+        # Plateau method
+        consecutive_points = kwargs.get('consecutive_points', 3)
+        relative_tolerance = kwargs.get('relative_tolerance', 0.01)
         
         for var_name, data_array in data_vars.items():
             if np.all(np.isnan(data_array)):
+                stability_points[var_name] = {
+                    'size': None,
+                    'index': None,
+                    'cv_at_stability': None,
+                    'smoothed_curve': None,
+                    'method': method
+                }
                 continue
-                
-            # Calculate coefficient of variation for each size
-            cv_values = []
-            for i in range(len(sizes)):
-                size_data = data_array[i, :]
-                valid_data = size_data[~np.isnan(size_data)]
-                if len(valid_data) > 1:
-                    mean_val = np.mean(valid_data)
-                    std_val = np.std(valid_data)
-                    cv = std_val / abs(mean_val) if mean_val != 0 else np.inf
-                    cv_values.append(cv)
-                else:
-                    cv_values.append(np.inf)
             
-            # Find first point where CV stays below threshold for window_size consecutive points
+            # Calculate medians for methods that need them
+            medians = np.array([np.nanmedian(data_array[i, :]) for i in range(len(sizes))])
+            
             stable_idx = None
-            for i in range(len(cv_values) - window_size + 1):
-                window_cvs = cv_values[i:i + window_size]
-                if all(cv < cv_threshold for cv in window_cvs if not np.isinf(cv)):
-                    stable_idx = i
-                    break
+            smoothed_curve = None
+            cv_at_stability = None
             
+            if method == 'cv':
+                # Original CV-based method
+                cv_values = []
+                for i in range(len(sizes)):
+                    size_data = data_array[i, :]
+                    valid_data = size_data[~np.isnan(size_data)]
+                    if len(valid_data) > 1:
+                        mean_val = np.mean(valid_data)
+                        std_val = np.std(valid_data)
+                        cv = std_val / abs(mean_val) if mean_val != 0 else np.inf
+                        cv_values.append(cv)
+                    else:
+                        cv_values.append(np.inf)
+                
+                # Find first point where CV stays below threshold
+                for i in range(len(cv_values) - window_size + 1):
+                    window_cvs = cv_values[i:i + window_size]
+                    if all(cv < cv_threshold for cv in window_cvs if not np.isinf(cv)):
+                        stable_idx = i
+                        cv_at_stability = cv_values[i]
+                        break
+            
+            elif method == 'kneedle':
+                # Kneedle algorithm on median curve
+                stable_idx, smoothed_curve = self._kneedle_detection(
+                    sizes, medians, smooth=smooth, smoothing_method=smoothing_method
+                )
+            
+            elif method == 'plateau':
+                # Plateau detection on median curve
+                stable_idx = self._plateau_detection(
+                    sizes, medians,
+                    consecutive_points=consecutive_points,
+                    relative_tolerance=relative_tolerance
+                )
+            
+            else:
+                raise ValueError(f"Unknown stability detection method: {method}")
+            
+            # Store results
             if stable_idx is not None:
                 stability_points[var_name] = {
                     'size': int(sizes[stable_idx]),
-                    'index': stable_idx,
-                    'cv_at_stability': cv_values[stable_idx]
+                    'index': int(stable_idx),
+                    'cv_at_stability': cv_at_stability,
+                    'smoothed_curve': smoothed_curve,
+                    'method': method
                 }
             else:
                 stability_points[var_name] = {
                     'size': None,
                     'index': None,
-                    'cv_at_stability': None
+                    'cv_at_stability': None,
+                    'smoothed_curve': smoothed_curve,
+                    'method': method
                 }
         
         return stability_points
+
+    def _detect_stability_points(self, data_vars: Dict[str, np.ndarray], sizes: np.ndarray) -> Dict[str, Dict[str, Any]]:
+        """
+        Detect stability points for each variable using coefficient of variation.
+        
+        Legacy method kept for backward compatibility. Use _detect_stability_unified instead.
+        
+        A variable is considered stable when its coefficient of variation
+        (std/mean) across repeats becomes consistently low.
+        """
+        return self._detect_stability_unified(data_vars, sizes, method='cv')
 
     def _aggregate_and_detect_stability(
         self,
@@ -1135,11 +1578,46 @@ class MagicAdjuster:
         sizes: np.ndarray,
         plot_type: str,
         stability_points: Optional[Dict[str, Dict[str, Any]]] = None,
+        distribution_name: Optional[str] = None,
+        max_size: Optional[int] = None,
+        recommended_size: Optional[int] = None,
+        primary_metric: Optional[str] = None,
+        stable_pvalue_ks: Optional[float] = None,
+        stable_pvalue_chi2: Optional[float] = None,
+        stable_rmse: Optional[float] = None,
     ):
-        """Create 2x3 summary figure (row 1: parameters, row 2: test p-values/statistics).
-
-        Draws a vertical dashed red line at the stability sample size for each
-        variable if available in stability_points.
+        """
+        Create 2x3 summary figure with enhanced information.
+        
+        Parameters
+        ----------
+        data_vars : dict
+            Dictionary of variable names to (sizes x repeats) arrays
+        sizes : np.ndarray
+            Sample sizes tested
+        plot_type : str
+            'series' or 'boxplots'
+        stability_points : dict, optional
+            Stability information for each variable
+        distribution_name : str, optional
+            Name of fitted distribution
+        max_size : int, optional
+            Maximum sample size tested
+        recommended_size : int, optional
+            Recommended sample size from stability analysis
+        primary_metric : str, optional
+            Primary metric used for recommendation
+        stable_pvalue_ks : float, optional
+            KS p-value at stable size
+        stable_pvalue_chi2 : float, optional
+            Chi-square p-value at stable size
+        stable_rmse : float, optional
+            RMSE at stable size
+            
+        Returns
+        -------
+        matplotlib.figure.Figure or None
+            Generated figure
         """
         try:
             import matplotlib.pyplot as plt
@@ -1156,47 +1634,100 @@ class MagicAdjuster:
         test_names = [t for t in preferred_tests if t in data_vars][:3]
 
         # Always build a 2x3 grid; hide unused axes
-        fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
+        fig, axes = plt.subplots(2, 3, figsize=(16, 8), sharex=True)
         axes_flat = axes.ravel()
 
         def _panel(ax, data: np.ndarray, title: str, var_name: str):
+            """Create individual panel with data and stability markers."""
+            # Plot main data
             if plot_type == 'boxplots':
                 box_data = [data[i, ~np.isnan(data[i, :])] for i in range(len(sizes))]
                 if len(sizes) > 1:
                     width = max(1, (sizes[1] - sizes[0]) * 0.6)
                 else:
                     width = 5
-                ax.boxplot(box_data, positions=sizes, widths=width)
+                bp = ax.boxplot(box_data, positions=sizes, widths=width, patch_artist=True)
+                for patch in bp['boxes']:
+                    patch.set_facecolor('lightblue')
+                    patch.set_alpha(0.7)
             else:  # series
                 med = np.nanmedian(data, axis=1)
                 q25 = np.nanpercentile(data, 25, axis=1)
                 q75 = np.nanpercentile(data, 75, axis=1)
-                ax.plot(sizes, med, 'o-', lw=1.4, label='Median')
-                ax.fill_between(sizes, q25, q75, alpha=0.25, label='IQR')
-                ax.legend(frameon=False, fontsize=8)
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
+                ax.plot(sizes, med, 'o-', lw=2, label='Median', color='steelblue', markersize=5)
+                ax.fill_between(sizes, q25, q75, alpha=0.3, label='IQR (25-75%)', color='steelblue')
+                
+                # Add smoothed curve if available
+                if stability_points and var_name in stability_points:
+                    sp = stability_points[var_name]
+                    if sp.get('smoothed_curve') is not None:
+                        smoothed = sp['smoothed_curve']
+                        valid_mask = ~np.isnan(smoothed)
+                        if np.sum(valid_mask) > 0:
+                            ax.plot(sizes[valid_mask], smoothed[valid_mask], 
+                                  '--', lw=1.5, label='Smoothed', color='orange', alpha=0.8)
+            
+            ax.set_title(title, fontsize=11, fontweight='bold')
+            ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+            
             # Stability vertical line if exists
-            if stability_points:
-                sp = stability_points.get(var_name)
+            legend_items = []
+            if stability_points and var_name in stability_points:
+                sp = stability_points[var_name]
                 if sp and sp.get('size') is not None:
                     try:
-                        ax.axvline(sp['size'], color='red', linestyle='--', linewidth=1, alpha=0.85)
+                        vline = ax.axvline(sp['size'], color='red', linestyle='--', 
+                                          linewidth=2, alpha=0.7, zorder=10)
+                        legend_items.append((vline, f"Stable: n={sp['size']}"))
                     except Exception:
                         pass
 
             # Draw horizontal alpha threshold for p-value panels (KS / Chi2)
             if var_name in ('ks_pvalue', 'chi2_pvalue'):
                 try:
-                    ax.axhline(0.05, color='red', linestyle='--', linewidth=1, alpha=0.9)
+                    hline = ax.axhline(0.05, color='darkred', linestyle=':', 
+                                      linewidth=1.5, alpha=0.7, zorder=9)
+                    legend_items.append((hline, 'α = 0.05'))
+                    
+                    # Add p-value at stable point if available
+                    if var_name == 'ks_pvalue' and stable_pvalue_ks is not None:
+                        ax.text(0.98, 0.98, f'p-value @ stable: {stable_pvalue_ks:.3f}',
+                               transform=ax.transAxes, fontsize=9,
+                               verticalalignment='top', horizontalalignment='right',
+                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                    elif var_name == 'chi2_pvalue' and stable_pvalue_chi2 is not None:
+                        ax.text(0.98, 0.98, f'p-value @ stable: {stable_pvalue_chi2:.3f}',
+                               transform=ax.transAxes, fontsize=9,
+                               verticalalignment='top', horizontalalignment='right',
+                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
                 except Exception:
                     pass
+            
+            # Add RMSE value at stable point
+            if var_name == 'rmse' and stable_rmse is not None:
+                try:
+                    ax.text(0.98, 0.98, f'RMSE @ stable: {stable_rmse:.4f}',
+                           transform=ax.transAxes, fontsize=9,
+                           verticalalignment='top', horizontalalignment='right',
+                           bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+                except Exception:
+                    pass
+            
+            # Create legend
+            if plot_type == 'series' or legend_items:
+                handles, labels = ax.get_legend_handles_labels()
+                for item_handle, item_label in legend_items:
+                    handles.append(item_handle)
+                    labels.append(item_label)
+                if handles:
+                    ax.legend(handles, labels, frameon=True, fontsize=8, 
+                            loc='best', framealpha=0.9)
 
         # Parameter panels (row 0)
         for col, pname in enumerate(param_names):
             ax = axes[0, col]
             _panel(ax, data_vars[pname], pname.replace('_', ' ').title(), pname)
-            ax.set_ylabel('Value')
+            ax.set_ylabel('Parameter Value', fontsize=10)
         # Hide unused param axes in row 0
         for col in range(len(param_names), 3):
             axes[0, col].axis('off')
@@ -1206,24 +1737,43 @@ class MagicAdjuster:
             ax = axes[1, col]
             label = tname.replace('_', ' ').title()
             _panel(ax, data_vars[tname], label, tname)
-            ax.set_xlabel('Sample Size')
+            ax.set_xlabel('Sample Size (n)', fontsize=10)
             if col == 0:
-                ax.set_ylabel('Value')
-            # Ensure p-value/statistic panels start at 0 on y-axis
-            try:
-                ax.set_ylim(bottom=0)
-            except Exception:
-                pass
+                ax.set_ylabel('Test Value', fontsize=10)
+            # Ensure p-value panels show full range [0, 1]
+            if 'pvalue' in tname:
+                try:
+                    ax.set_ylim(-0.05, 1.05)
+                except Exception:
+                    pass
+            # RMSE should start at 0
+            elif tname == 'rmse':
+                try:
+                    ax.set_ylim(bottom=0)
+                except Exception:
+                    pass
         for col in range(len(test_names), 3):
             axes[1, col].axis('off')
 
         # Shared formatting
         for ax in axes_flat:
             if ax.has_data():
-                ax.tick_params(axis='x', rotation=0)
+                ax.tick_params(axis='both', labelsize=9)
 
-        fig.suptitle('Monte Carlo Stability Summary', fontsize=14)
-        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        # Create informative title
+        title_parts = ['Monte Carlo Stability Analysis']
+        if distribution_name:
+            title_parts.append(f'Distribution: {distribution_name}')
+        if max_size:
+            title_parts.append(f'Max n: {max_size}')
+        if recommended_size and primary_metric:
+            metric_display = primary_metric.replace('_', ' ').upper()
+            title_parts.append(f'Stable @ n={recommended_size} ({metric_display})')
+        
+        title = ' | '.join(title_parts)
+        fig.suptitle(title, fontsize=13, fontweight='bold')
+        
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         return fig
 
 ## TO-DO:
