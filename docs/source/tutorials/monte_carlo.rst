@@ -60,9 +60,9 @@ consecutive window of sample sizes.
 
 .. math::
 
-    CV_n = \\frac{\\sigma_n}{\\mu_n}
+    CV_n = \frac{\sigma_n}{\mu_n}
 
-Where :math:`\\sigma_n` is the standard deviation and :math:`\\mu_n` is the mean
+Where :math:`\sigma_n` is the standard deviation and :math:`\mu_n` is the mean
 across repeats at sample size n.
 
 **When to use**:
@@ -92,7 +92,7 @@ The knee point is where:
 
 .. math::
 
-    \\text{knee} = \\arg\\max_i |y_i - (y_0 + (y_n - y_0) \\cdot \\frac{i}{n})|
+    \text{knee} = \arg\max_i |y_i - (y_0 + (y_n - y_0) \cdot \frac{i}{n})|
 
 Where :math:`y_i` is the normalized curve value at point i.
 
@@ -125,13 +125,13 @@ Relative change at point i:
 
 .. math::
 
-    \\Delta_i = \\frac{|y_{i-1} - y_i|}{|y_{i-1}|}
+    \Delta_i = \frac{|y_{i-1} - y_i|}{|y_{i-1}|}
 
 Stability when:
 
 .. math::
 
-    \\Delta_i < \\epsilon \\text{ for } L \\text{ consecutive points}
+    \Delta_i < \epsilon \text{ for } L \text{ consecutive points}
 
 **When to use**:
 

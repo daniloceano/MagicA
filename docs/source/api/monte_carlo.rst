@@ -200,11 +200,11 @@ CV Method (Coefficient of Variation)
 
 .. math::
 
-    CV_n = \\frac{\\sigma_n}{\\mu_n}
+    CV_n = \frac{\sigma_n}{\mu_n}
 
 Where:
-- :math:`\\sigma_n` = standard deviation across repeats at size n
-- :math:`\\mu_n` = mean value across repeats at size n
+- :math:`\sigma_n` = standard deviation across repeats at size n
+- :math:`\mu_n` = mean value across repeats at size n
 
 **Advantages:**
 
@@ -257,7 +257,7 @@ Kneedle Method (Elbow Detection)
 
 .. math::
 
-    D_i = |y_i - (y_0 + (y_n - y_0) \\cdot \\frac{i}{n})|
+    D_i = |y_i - (y_0 + (y_n - y_0) \cdot \frac{i}{n})|
 
 Where:
 - :math:`D_i` = distance from reference line at point i
@@ -326,11 +326,11 @@ Stability detected when:
 
 .. math::
 
-    \\Delta_i < \\epsilon \\text{ for } L \\text{ consecutive points}
+    \Delta_i < \epsilon \text{ for } L \text{ consecutive points}
 
 Where:
-- :math:`\\Delta_i` = relative change at point i
-- :math:`\\epsilon` = relative tolerance (default: 0.01, i.e., 1%)
+- :math:`\Delta_i` = relative change at point i
+- :math:`\epsilon` = relative tolerance (default: 0.01, i.e., 1%)
 - :math:`L` = consecutive points threshold (default: 3)
 
 **Advantages:**
