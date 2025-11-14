@@ -92,16 +92,16 @@ Goodness-of-Fit Tests
 Stability Detection
 ~~~~~~~~~~~~~~~~~~~
 
-**stability_method** : str, default='cv'
+**stability_method** : str, default='kneedle'
     Method for detecting when parameters and tests have stabilized. Options:
     
-    - ``'cv'``: Coefficient of Variation method (default, robust for erratic metrics)
-    - ``'kneedle'``: Kneedle algorithm for elbow detection (best for RMSE)
+    - ``'kneedle'``: Kneedle algorithm for elbow detection (default, best for RMSE)
+    - ``'cv'``: Coefficient of Variation method (robust for erratic metrics)
     - ``'plateau'``: Relative gain heuristic (early "good enough" detection)
     - ``'aggregate'``: Legacy median-based method (still supported)
     - ``None``: No stability detection
     
-    **⭐ Recommendation**: Use ``'kneedle'`` for RMSE stability detection - it excels at finding the "point of diminishing returns" in smooth, converging metrics.
+    **⭐ Default: 'kneedle'** - Recommended for RMSE stability detection as it excels at finding the "point of diminishing returns" in smooth, converging metrics.
 
     See `Stability Detection Methods`_ for detailed explanations and selection guidance.
 

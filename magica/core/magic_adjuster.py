@@ -602,7 +602,7 @@ class MagicAdjuster:
         sizes: Optional[List[int]] = None,
         n_repeats: int = 20,
         tests: List[str] = ['ks'],
-        stability_method: str = 'cv',
+        stability_method: str = 'kneedle',
         fig_output_path: Optional[str] = None,
         plot_type: str = 'series',
         sampling: str = 'random',
@@ -1041,7 +1041,9 @@ class MagicAdjuster:
                     primary_metric=primary_metric,
                     stable_pvalue_ks=stable_pvalue_ks,
                     stable_pvalue_chi2=stable_pvalue_chi2,
-                    stable_rmse=stable_rmse
+                    stable_rmse=stable_rmse,
+                    sampling_method=sampling,
+                    stability_method=stability_method
                 )
                 if fig is not None:
                     fig.savefig(fig_output_path, dpi=150, bbox_inches='tight')
@@ -1585,6 +1587,8 @@ class MagicAdjuster:
         stable_pvalue_ks: Optional[float] = None,
         stable_pvalue_chi2: Optional[float] = None,
         stable_rmse: Optional[float] = None,
+        sampling_method: Optional[str] = None,
+        stability_method: Optional[str] = None,
     ):
         """
         Create 2x3 summary figure with enhanced information.
@@ -1779,6 +1783,11 @@ class MagicAdjuster:
             title_parts.append(f'Distribution: {distribution_name}')
         if max_size:
             title_parts.append(f'Max n: {max_size}')
+        if sampling_method:
+            title_parts.append(f'Sampling: {sampling_method}')
+        if stability_method:
+            method_display = stability_method.capitalize()
+            title_parts.append(f'Method: {method_display}')
         if recommended_size and primary_metric:
             metric_display = primary_metric.replace('_', ' ').upper()
             title_parts.append(f'Stable @ n={recommended_size} ({metric_display})')

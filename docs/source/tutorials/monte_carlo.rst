@@ -35,7 +35,7 @@ Inputs and options
 - `sizes`: list or auto-generated grid of sample sizes.
 - `n_repeats`: number of subsamples per size.
 - `tests`: list of metrics to compute: `['ks','chi2','rmse']`.
-- `stability_method`: method for detecting stability points (`'cv'`, `'kneedle'`, `'plateau'`).
+- `stability_method`: method for detecting stability points (`'kneedle'` [default], `'cv'`, `'plateau'`).
 - `sampling`: sampling strategy (`random`, `bootstrap`, `disjoint`).
 - `fit_kwargs`: passed to the underlying fit routine (e.g., `floc=0`).
 - `distribution_params`: optional fixed parameters (skip fitting when supplied).
