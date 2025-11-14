@@ -1670,15 +1670,28 @@ class MagicAdjuster:
             ax.set_title(title, fontsize=11, fontweight='bold')
             ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
             
-            # Stability vertical line if exists
+            # Stability vertical lines
             legend_items = []
-            if stability_points and var_name in stability_points:
-                sp = stability_points[var_name]
-                if sp and sp.get('size') is not None:
-                    try:
-                        vline = ax.axvline(sp['size'], color='red', linestyle='--', 
+            
+            # Red line: primary metric stability point (shown in all panels)
+            if recommended_size is not None:
+                try:
+                    is_primary = (var_name == primary_metric)
+                    label = f"Stable: n={recommended_size}" if is_primary else f"RMSE stable: n={recommended_size}"
+                    vline_red = ax.axvline(recommended_size, color='red', linestyle='--', 
                                           linewidth=2, alpha=0.7, zorder=10)
-                        legend_items.append((vline, f"Stable: n={sp['size']}"))
+                    legend_items.append((vline_red, label))
+                except Exception:
+                    pass
+            
+            # Gray line: this metric's own stability point (if different from primary)
+            if stability_points and var_name in stability_points and var_name != primary_metric:
+                sp = stability_points[var_name]
+                if sp and sp.get('size') is not None and sp['size'] != recommended_size:
+                    try:
+                        vline_gray = ax.axvline(sp['size'], color='gray', linestyle=':', 
+                                              linewidth=1.5, alpha=0.6, zorder=9)
+                        legend_items.append((vline_gray, f"{var_name} stable: n={sp['size']}"))
                     except Exception:
                         pass
 
