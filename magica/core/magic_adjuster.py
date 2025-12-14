@@ -41,7 +41,7 @@ def get_available_distributions():
         'cosine': stats.cosine,
         'crystalball': stats.crystalball,
         'dgamma': stats.dgamma,
-        'dpareto_lognorm': stats.dpareto_lognorm,
+        # 'dpareto_lognorm': stats.dpareto_lognorm,  # Not available in SciPy 1.14
         'dweibull': stats.dweibull,
         'erlang': stats.erlang,
         'expon': stats.expon,
@@ -85,7 +85,7 @@ def get_available_distributions():
         'ksone': stats.ksone,
         'kstwo': stats.kstwo,
         'kstwobign': stats.kstwobign,
-        'landau': stats.landau,
+        # 'landau': stats.landau,  # Not available in SciPy 1.14
         'laplace': stats.laplace,
         'laplace_asymmetric': stats.laplace_asymmetric,
         'levy': stats.levy,
