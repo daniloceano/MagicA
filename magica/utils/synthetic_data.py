@@ -40,8 +40,8 @@ def generate_wind_data(
     freq : str, default='D'
         Frequency of observations. Pandas offset aliases:
         - 'D': Daily
-        - 'H': Hourly
-        - '6H': 6-hourly
+        - 'h': Hourly
+        - '6h': 6-hourly
         etc.
     mean_wind : float, default=8.0
         Mean wind speed (m/s) for base distribution
@@ -82,7 +82,7 @@ def generate_wind_data(
     >>> # Generate hourly data with plots
     >>> wind_data, plots = generate_wind_data(
     ...     n_years=10,
-    ...     freq='H',
+    ...     freq='h',
     ...     storm_duration_range=(12, 48),
     ...     create_plots=True
     ... )
