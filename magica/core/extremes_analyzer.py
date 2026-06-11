@@ -410,7 +410,7 @@ class ExtremesAnalyzer:
     
     def extract_block_maxima(
         self,
-        block_size: str = 'A',
+        block_size: str = 'YE',
         method: str = 'max'
     ) -> Tuple[np.ndarray, Optional[pd.DatetimeIndex]]:
         """
@@ -421,11 +421,11 @@ class ExtremesAnalyzer:
         
         Parameters
         ----------
-        block_size : str, default='A'
+        block_size : str, default='YE'
             Block size for resampling. Uses pandas offset aliases:
-            - 'A' or 'Y': Annual
-            - 'Q': Quarterly
-            - 'M': Monthly
+            - 'YE' or 'Y': Annual
+            - 'QE': Quarterly
+            - 'ME': Monthly
             - 'W': Weekly
             - 'D': Daily
         method : str, default='max'
@@ -441,7 +441,7 @@ class ExtremesAnalyzer:
         Examples
         --------
         >>> # Extract annual maxima
-        >>> annual_max, times = extremes.extract_block_maxima(block_size='A')
+        >>> annual_max, times = extremes.extract_block_maxima(block_size='YE')
         >>> 
         >>> # Extract monthly minima
         >>> monthly_min, times = extremes.extract_block_maxima(block_size='M', method='min')

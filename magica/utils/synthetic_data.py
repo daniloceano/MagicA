@@ -9,9 +9,6 @@ Useful for testing extreme value analysis methods and creating reproducible exam
 import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, Dict, Any, Union
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.axes import Axes
 
 
 def generate_wind_data(
@@ -158,7 +155,8 @@ def generate_wind_data(
     
     if not create_plots:
         return wind_series
-    
+
+    import matplotlib.pyplot as plt  # lazy import
     # Create diagnostic plots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8))
     
@@ -199,7 +197,7 @@ def generate_wind_data(
 
 def generate_directional_wind_data(
     n_years: float = 10,
-    freq: str = 'H',
+    freq: str = 'h',
     prevailing_direction: float = 270,
     prevailing_concentration: float = 1.5,
     secondary_direction: Optional[float] = 45,
@@ -231,8 +229,8 @@ def generate_directional_wind_data(
     ----------
     n_years : float, default=10
         Number of years of data to generate
-    freq : str, default='H'
-        Frequency of observations (e.g., 'H' for hourly, 'D' for daily)
+    freq : str, default='h'
+        Frequency of observations (e.g., 'h' for hourly, 'D' for daily)
     prevailing_direction : float, default=270
         Primary prevailing wind direction in degrees (0-360)
         0/360 = North, 90 = East, 180 = South, 270 = West
@@ -467,7 +465,8 @@ def generate_directional_wind_data(
     
     if not create_plots:
         return wind_data
-    
+
+    import matplotlib.pyplot as plt  # lazy import
     # Create diagnostic plots
     fig = plt.figure(figsize=(16, 12))
     gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.3)

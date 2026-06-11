@@ -2,12 +2,10 @@
 Statistical distribution fitting and adjustment for wind data
 """
 
-from matplotlib.pylab import seed
 import numpy as np
 from scipy import stats
 from scipy.interpolate import UnivariateSpline
 from scipy.signal import savgol_filter
-import xarray as xr
 from typing import Union, Dict, Any, Optional, Tuple, List
 import warnings
 from tqdm import tqdm, trange
@@ -612,7 +610,7 @@ class MagicAdjuster:
         n_sizes: int = 10,
         distribution_params: Optional[Tuple] = None,
         **kwargs
-    ) -> 'xr.Dataset':
+    ):
         """
         Perform Monte Carlo stability analysis for distribution fitting.
         
@@ -1052,6 +1050,7 @@ class MagicAdjuster:
                 warnings.warn(f"Failed to create figure: {e}")
                 figure_path = None
 
+        import xarray as xr  # lazy import — only needed when returning Dataset
         # Create Dataset (all numeric data only)
         ds = xr.Dataset(
             data_vars={name: (['sizes', 'repeats'], array) for name, array in data_vars.items()},
