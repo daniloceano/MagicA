@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from typing import Union
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Danilo Couto de Souza"
 __email__ = "danilo.oceano@gmail.com"
 
@@ -40,10 +40,13 @@ def read_data(data: Union[np.ndarray, list, pd.Series, pd.DataFrame]) -> DataPro
         
     Examples
     --------
-    >>> import magica as ma
-    >>> wind_data = [2.1, 5.4, 8.7, 12.3, 6.8, 9.1]
+    >>> import magica as ma, numpy as np
+    >>> wind_data = np.random.weibull(2, 500) * 8
     >>> data = ma.read_data(wind_data)
-    >>> fitted = data.fit_distribution('weibull')
+    >>> fit = data.fit('weibull', floc=0)
+    >>> fit.params
+    >>> fit.cdf(np.array([5., 10.]))
+    >>> fit.goodness_of_fit('ks')
     """
     return DataProcessor(data)
 
