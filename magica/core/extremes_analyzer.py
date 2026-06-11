@@ -1,122 +1,276 @@
 """
-Extreme values analysis for statistical data
+Extreme value analysis: Block Maxima and Peaks over Threshold
 
-This module provides tools for analyzing extreme values in time series data,
-including return period and return value analysis.
+Provides return-period and return-value calculations with correct formulas
+for both Block Maxima (GEV) and Peaks-over-Threshold (GPD) methods.
+
+GPD convention used throughout:
+  scipy.stats.genpareto is fitted to exceedances **above the threshold**
+  (i.e. ``exceedances - u``) with ``floc=0``, yielding params ``(ξ, 0, σ)``.
+
+Return-level formulas:
+  Block Maxima:
+    x_T = ppf(1 - 1/T)   where T is in block units (typically years)
+  PoT + GPD:
+    if |ξ| >= 1e-6:  x_T = u + (σ/ξ) * ((λ*T)^ξ - 1)
+    if |ξ| <  1e-6:  x_T = u + σ * ln(λ*T)
+  where λ = n_independent / time_span  (exceedances per year)
 """
 
 import numpy as np
 import pandas as pd
 import warnings
-from typing import Union, Optional, Dict, Any, Tuple
+from dataclasses import dataclass
+from typing import Union, Optional, Dict, Any, Tuple, List
 from scipy import stats
 
 from .data_processor import DataProcessor
+from .magic_adjuster import FitResult, get_available_distributions
+from .auto_fitter import EVA_FAMILIES
 
+
+# ---------------------------------------------------------------------------
+# EVAFit – FitResult extended with extremes metadata
+# ---------------------------------------------------------------------------
+
+@dataclass(eq=False, frozen=True)
+class EVAFit(FitResult):
+    """
+    Immutable result of an extreme-value fit, augmented with EVA metadata.
+
+    All :class:`~magica.core.magic_adjuster.FitResult` methods are available.
+
+    Additional attributes
+    ---------------------
+    method : str
+        ``'bm'`` (Block Maxima) or ``'pot'`` (Peaks over Threshold).
+    threshold : float or None
+        PoT threshold ``u``.  ``None`` for Block Maxima.
+    lambda_rate : float or None
+        Exceedance rate λ (independent exceedances per year).  ``None`` for BM.
+    blocks_per_year : float or None
+        For Block Maxima: number of blocks per year (typically 1).  ``None`` for PoT.
+    """
+
+    method: str
+    threshold: Optional[float]
+    lambda_rate: Optional[float]
+    blocks_per_year: Optional[float]
+
+    def return_value(self, T: Union[float, np.ndarray]) -> np.ndarray:
+        """
+        Return level for return period *T* (in years).
+
+        Dispatches to the correct formula based on ``method``.
+
+        Parameters
+        ----------
+        T : float or array-like
+
+        Returns
+        -------
+        ndarray
+        """
+        T = np.asarray(T, dtype=float)
+        if self.method == 'bm':
+            return self._rv_block_maxima(T)
+        elif self.method == 'pot':
+            return self._rv_pot(T)
+        else:
+            raise ValueError(f"Unknown EVA method: {self.method!r}")
+
+    def return_period(self, x: Union[float, np.ndarray]) -> np.ndarray:
+        """
+        Return period for value *x* (in years).
+
+        Parameters
+        ----------
+        x : float or array-like
+
+        Returns
+        -------
+        ndarray
+        """
+        x = np.asarray(x, dtype=float)
+        if self.method == 'bm':
+            return self._rp_block_maxima(x)
+        elif self.method == 'pot':
+            return self._rp_pot(x)
+        else:
+            raise ValueError(f"Unknown EVA method: {self.method!r}")
+
+    def return_level_table(
+        self, periods: List[float]
+    ) -> List[Dict[str, float]]:
+        """
+        Serialisable table of return periods and corresponding levels.
+
+        Suitable for passing to a frontend.  Confidence intervals are
+        reserved as ``None`` (placeholder for future bootstrap CI support).
+
+        Parameters
+        ----------
+        periods : list of float
+
+        Returns
+        -------
+        list of dict
+            ``[{'period': T, 'level': x, 'ci_low': None, 'ci_high': None}, ...]``
+        """
+        levels = self.return_value(np.asarray(periods, dtype=float))
+        return [
+            {'period': float(T), 'level': float(rv), 'ci_low': None, 'ci_high': None}
+            for T, rv in zip(periods, np.atleast_1d(levels))
+        ]
+
+    # ------------------------------------------------------------------
+    # Private: BM formulas
+    # ------------------------------------------------------------------
+
+    def _rv_block_maxima(self, T: np.ndarray) -> np.ndarray:
+        """x_T = ppf(1 - 1/T)"""
+        non_exc = 1.0 - 1.0 / T
+        return self.distribution.ppf(non_exc, *self.params)
+
+    def _rp_block_maxima(self, x: np.ndarray) -> np.ndarray:
+        """T = 1 / (1 - CDF(x))"""
+        exc_prob = 1.0 - self.distribution.cdf(x, *self.params)
+        return np.where(exc_prob > 0, 1.0 / exc_prob, np.inf)
+
+    # ------------------------------------------------------------------
+    # Private: PoT + GPD formulas
+    # ------------------------------------------------------------------
+
+    def _rv_pot(self, T: np.ndarray) -> np.ndarray:
+        """
+        Return level for PoT + GPD.
+
+        Convention: genpareto fitted to (exceedances - u) with floc=0 so that
+        params = (ξ, 0, σ).  Params tuple from scipy: (c, loc, scale) = (ξ, 0, σ).
+        """
+        u = self.threshold
+        lam = self.lambda_rate
+        if u is None or lam is None:
+            raise ValueError("threshold and lambda_rate must be set for PoT return values.")
+
+        xi = float(self.params[0])   # shape (ξ)
+        sigma = float(self.params[2])  # scale (σ); params[1] = loc = 0 (floc=0)
+
+        lam_T = lam * T
+
+        if abs(xi) >= 1e-6:
+            return u + (sigma / xi) * (lam_T ** xi - 1.0)
+        else:
+            # Gumbel / exponential limit (ξ → 0)
+            return u + sigma * np.log(lam_T)
+
+    def _rp_pot(self, x: np.ndarray) -> np.ndarray:
+        """
+        Return period for PoT + GPD.
+
+        Computes the exceedance rate of *x* via the GPD tail, then T = 1/λ_x.
+        """
+        u = self.threshold
+        lam = self.lambda_rate
+        if u is None or lam is None:
+            raise ValueError("threshold and lambda_rate must be set for PoT return periods.")
+
+        xi = float(self.params[0])
+        sigma = float(self.params[2])
+        z = x - u
+
+        if abs(xi) >= 1e-6:
+            lam_x = lam * (1.0 + xi * z / sigma) ** (-1.0 / xi)
+        else:
+            lam_x = lam * np.exp(-z / sigma)
+
+        return np.where(lam_x > 0, 1.0 / lam_x, np.inf)
+
+    def __repr__(self) -> str:
+        param_str = ", ".join(f"{p:.4g}" for p in self.params)
+        meta = (f"method='{self.method}', "
+                f"threshold={self.threshold}, lambda={self.lambda_rate:.4g}"
+                if self.method == 'pot' and self.lambda_rate is not None
+                else f"method='{self.method}'")
+        return (f"EVAFit(distribution='{self.name}', "
+                f"params=({param_str}), {meta}, data_size={len(self.data)})")
+
+
+# ---------------------------------------------------------------------------
+# ExtremesAnalyzer
+# ---------------------------------------------------------------------------
 
 class ExtremesAnalyzer:
     """
-    Extreme values analysis with return period and return value calculations.
-    
-    This class analyzes extreme values in time series data, calculating return
-    periods and return values using statistical distributions fitted to the data.
-    
-    The analyzer supports multiple input formats:
-    - Pandas Series with datetime index
-    - Pandas DataFrame with time column
-    - Paired numpy arrays (times, values)
-    - Simple numpy array (assumes uniform time spacing)
-    
+    Extreme value analysis with return period and return value calculations.
+
+    Supports Block Maxima (BM) and Peaks over Threshold (PoT) methods.
+    Both methods fit distributions **to the extracted extreme sample**, not
+    to the full time series.
+
     Parameters
     ----------
     data_processor : DataProcessor
-        Processor instance with loaded data
     times : array-like, optional
-        Time values corresponding to data points. Can be:
-        - datetime array/Series
-        - numeric array (e.g., years, days)
-        - None if data is pandas Series with datetime index
-    time_unit : str, default='years'
-        Time unit for return period calculations ('years', 'days', 'hours', 'months')
-    
+    time_unit : str, default ``'years'``
+
     Examples
     --------
-    >>> import numpy as np
-    >>> import pandas as pd
-    >>> import magica as ma
-    >>> 
-    >>> # Using pandas Series with datetime index
-    >>> dates = pd.date_range('2000-01-01', periods=1000, freq='D')
-    >>> values = np.random.weibull(2, 1000) * 10
-    >>> series = pd.Series(values, index=dates)
-    >>> 
-    >>> processor = ma.read_data(series)
+    **Block Maxima (GEV):**
+
     >>> extremes = processor.get_extremes_analyzer()
-    >>> extremes.fit_distribution('genextreme')
-    >>> 
-    >>> # Calculate 100-year return value
-    >>> rv_100 = extremes.return_value(100)
-    >>> print(f"100-year return value: {rv_100:.2f}")
+    >>> annual_max, times = extremes.extract_block_maxima('YE')
+    >>> ev_fit = extremes.fit_block_maxima(annual_max, times)
+    >>> ev_fit.return_value([10, 50, 100])
+
+    **Peaks over Threshold (GPD):**
+
+    >>> result = extremes.find_optimal_pot_threshold(min_samples=50)
+    >>> ev_fit = extremes.fit_pot(result)
+    >>> ev_fit.return_value([10, 50, 100])
     """
-    
+
     def __init__(
         self,
         data_processor: DataProcessor,
         times: Optional[Union[np.ndarray, pd.Series, pd.DatetimeIndex]] = None,
-        time_unit: str = 'years'
+        time_unit: str = 'years',
     ):
-        """
-        Initialize ExtremesAnalyzer with data and time information.
-        
-        Parameters
-        ----------
-        data_processor : DataProcessor
-            The data processor containing values to analyze
-        times : array-like, optional
-            Time values or datetime index
-        time_unit : str, default='years'
-            Unit for return period calculations
-        """
         if data_processor.data is None:
-            raise ValueError("DataProcessor must contain data before extreme analysis")
-        
+            raise ValueError("DataProcessor must contain data before extreme analysis.")
+
         self.data_processor = data_processor
-        self.data = data_processor.get_data_array()
+        self.data = data_processor.data  # shared reference
         self.time_unit = time_unit
-        
-        # Handle different time input formats
+
         self._process_times(times)
-        
-        # Internal adjuster for distribution fitting
-        self._adjuster = None
-        self.distribution_name = None
-        self.fitted_params = None
-        
-    def _process_times(self, times: Optional[Union[np.ndarray, pd.Series, pd.DatetimeIndex]]):
-        """
-        Process time information from various input formats.
-        
-        Parameters
-        ----------
-        times : array-like or None
-            Time information in various formats
-        """
+
+        # Legacy state — populated by fit_distribution() for backward compat
+        self.distribution_name: Optional[str] = None
+        self.fitted_params: Optional[tuple] = None
+        self._eva_fit: Optional[EVAFit] = None
+
+    # ------------------------------------------------------------------
+    # Time handling
+    # ------------------------------------------------------------------
+
+    def _process_times(
+        self, times: Optional[Union[np.ndarray, pd.Series, pd.DatetimeIndex]]
+    ):
         if times is None:
-            # Check if original data was pandas Series with datetime index
             if hasattr(self.data_processor, '_original_data'):
-                original = self.data_processor._original_data
-                if isinstance(original, pd.Series) and isinstance(original.index, pd.DatetimeIndex):
-                    times = original.index
-                    
+                orig = self.data_processor._original_data
+                if isinstance(orig, pd.Series) and isinstance(orig.index, pd.DatetimeIndex):
+                    times = orig.index
+
         if times is None:
-            # No time information - assume uniform spacing
             warnings.warn(
                 "No time information provided. Assuming uniform time spacing. "
                 "Return periods will be in units of observation count."
             )
             self.times = np.arange(len(self.data))
             self.has_datetime = False
-            self.time_span = len(self.data)
+            self.time_span = float(len(self.data))
         elif isinstance(times, pd.DatetimeIndex):
             self.times = times
             self.has_datetime = True
@@ -129,9 +283,8 @@ class ExtremesAnalyzer:
             else:
                 self.times = times.values
                 self.has_datetime = False
-                self.time_span = np.ptp(self.times)  # max - min
+                self.time_span = float(np.ptp(self.times))
         else:
-            # Numpy array or list
             times_array = np.array(times)
             if np.issubdtype(times_array.dtype, np.datetime64):
                 self.times = pd.DatetimeIndex(times_array)
@@ -140,24 +293,10 @@ class ExtremesAnalyzer:
             else:
                 self.times = times_array
                 self.has_datetime = False
-                self.time_span = np.ptp(self.times) if len(times_array) > 1 else len(times_array)
-                
+                self.time_span = float(np.ptp(times_array)) if len(times_array) > 1 else float(len(times_array))
+
     def _calculate_time_span(self, times: pd.DatetimeIndex) -> float:
-        """
-        Calculate time span in specified units from datetime index.
-        
-        Parameters
-        ----------
-        times : pd.DatetimeIndex
-            Datetime index
-            
-        Returns
-        -------
-        float
-            Time span in specified units
-        """
         delta = times[-1] - times[0]
-        
         if self.time_unit == 'years':
             return delta.total_seconds() / (365.25 * 24 * 3600)
         elif self.time_unit == 'days':
@@ -165,458 +304,376 @@ class ExtremesAnalyzer:
         elif self.time_unit == 'hours':
             return delta.total_seconds() / 3600
         elif self.time_unit == 'months':
-            return delta.total_seconds() / (30.44 * 24 * 3600)  # Average month
+            return delta.total_seconds() / (30.44 * 24 * 3600)
         else:
-            raise ValueError(f"Unknown time unit: {self.time_unit}")
-    
-    def _get_adjuster(self):
-        """Get or create the internal adjuster."""
-        if self._adjuster is None:
-            from .magic_adjuster import MagicAdjuster
-            self._adjuster = MagicAdjuster(self.data_processor)
-        return self._adjuster
-    
-    def fit_distribution(self, distribution: Union[str, object], **kwargs) -> 'ExtremesAnalyzer':
+            raise ValueError(f"Unknown time unit: {self.time_unit!r}")
+
+    # ------------------------------------------------------------------
+    # Primary EVA fitting methods
+    # ------------------------------------------------------------------
+
+    def fit_block_maxima(
+        self,
+        block_maxima: np.ndarray,
+        times: Optional[pd.DatetimeIndex] = None,
+        distribution: str = 'genextreme',
+        blocks_per_year: float = 1.0,
+        **fit_kwargs,
+    ) -> EVAFit:
         """
-        Fit a statistical distribution for extreme value analysis.
-        
-        This method can be called directly on ExtremesAnalyzer to fit
-        distributions to the extreme data, without requiring a prior
-        fit on the underlying DataProcessor.
-        
-        Common distributions for extremes:
-        - 'genextreme' - Generalized Extreme Value (GEV)
-        - 'gumbel_r' - Gumbel distribution (Type I extreme)
-        - 'gumbel_l' - Gumbel left (minimum extremes)
-        - 'weibull_min' - Weibull (minimum extremes)
-        - 'weibull_max' - Weibull (maximum extremes)
-        - 'genpareto' - Generalized Pareto Distribution (GPD, for POT)
-        
+        Fit a distribution to block maxima and return an :class:`EVAFit`.
+
+        The fit is performed on *block_maxima*, not on the full series.
+
         Parameters
         ----------
-        distribution : str or scipy.stats distribution
-            Distribution to fit
-        **kwargs : dict
-            Additional arguments passed to fit method
-            
+        block_maxima : ndarray
+            Values extracted by :meth:`extract_block_maxima`.
+        times : DatetimeIndex, optional
+            Block times (not used in fitting, kept for record).
+        distribution : str, default ``'genextreme'``
+            Must be in ``EVA_FAMILIES['bm']``: ``'genextreme'`` or ``'gumbel_r'``.
+        blocks_per_year : float, default 1.0
+            Number of blocks per year (used to document the fit; does not
+            change the return-level formula for BM).
+        **fit_kwargs
+            Passed to ``distribution.fit()``.
+
+        Returns
+        -------
+        EVAFit
+        """
+        _check_eva_family('bm', distribution)
+
+        dist_map = get_available_distributions()
+        dist_obj = dist_map[distribution.lower()]
+        params = dist_obj.fit(block_maxima, **fit_kwargs)
+
+        eva_fit = EVAFit(
+            distribution=dist_obj,
+            name=distribution.lower(),
+            params=tuple(params),
+            data=block_maxima,
+            method='bm',
+            threshold=None,
+            lambda_rate=None,
+            blocks_per_year=blocks_per_year,
+        )
+        self._eva_fit = eva_fit
+        self.distribution_name = eva_fit.name
+        self.fitted_params = eva_fit.params
+        return eva_fit
+
+    def fit_pot(
+        self,
+        pot_result: Dict[str, Any],
+        distribution: str = 'genpareto',
+    ) -> EVAFit:
+        """
+        Fit a GPD to PoT exceedances and return an :class:`EVAFit`.
+
+        The fit uses exceedances **above the threshold** (``exceedances - u``)
+        with ``floc=0``, yielding parameters ``(ξ, 0, σ)``.
+
+        Parameters
+        ----------
+        pot_result : dict
+            Dictionary as returned by :meth:`find_optimal_pot_threshold`.
+            Must contain ``'exceedances'``, ``'threshold'``, and
+            ``'n_independent'``.
+        distribution : str, default ``'genpareto'``
+            Must be in ``EVA_FAMILIES['pot']``.
+
+        Returns
+        -------
+        EVAFit
+        """
+        _check_eva_family('pot', distribution)
+
+        exceedances = pot_result['exceedances']
+        u = float(pot_result['threshold'])
+        n_independent = int(pot_result['n_independent'])
+
+        if len(exceedances) == 0:
+            raise ValueError("No exceedances in pot_result; cannot fit distribution.")
+        if self.time_span <= 0:
+            raise ValueError("time_span must be > 0 to compute exceedance rate λ.")
+
+        # λ = independent exceedances per year
+        lambda_rate = n_independent / self.time_span
+
+        dist_map = get_available_distributions()
+        dist_obj = dist_map[distribution.lower()]
+
+        # Fit to exceedances - u with floc=0
+        exceedances_above = exceedances - u
+        params = dist_obj.fit(exceedances_above, floc=0)
+
+        eva_fit = EVAFit(
+            distribution=dist_obj,
+            name=distribution.lower(),
+            params=tuple(params),
+            data=exceedances_above,
+            method='pot',
+            threshold=u,
+            lambda_rate=lambda_rate,
+            blocks_per_year=None,
+        )
+        self._eva_fit = eva_fit
+        self.distribution_name = eva_fit.name
+        self.fitted_params = eva_fit.params
+        return eva_fit
+
+    # ------------------------------------------------------------------
+    # Legacy fit_distribution (backward compat for BM path only)
+    # ------------------------------------------------------------------
+
+    def fit_distribution(
+        self, distribution: Union[str, object], **kwargs
+    ) -> 'ExtremesAnalyzer':
+        """
+        Fit a distribution directly on the analyzer's current data.
+
+        .. deprecated::
+            Prefer :meth:`fit_block_maxima` or :meth:`fit_pot` which fit on
+            the *extracted* extreme sample and carry the correct metadata for
+            return-level calculations.
+
+        This legacy method fits on the data held by the internal
+        DataProcessor (which may be the full series if the caller already
+        created a processor from the extracted extremes), using the BM
+        return-level formula.  It is retained for backward compatibility
+        with existing tutorials and notebooks.
+
         Returns
         -------
         ExtremesAnalyzer
-            Self for method chaining
-            
-        Examples
-        --------
-        >>> # Direct fitting on extremes analyzer
-        >>> extremes = processor.get_extremes_analyzer()
-        >>> annual_max, times = extremes.extract_block_maxima('Y')
-        >>> 
-        >>> # Create new processor with maxima and fit
-        >>> maxima_proc = ma.read_data(annual_max)
-        >>> maxima_extremes = maxima_proc.get_extremes_analyzer()
-        >>> maxima_extremes.fit_distribution('genextreme')
-        >>> rv_100 = maxima_extremes.return_value(100)
+            Self for method chaining.
         """
-        adjuster = self._get_adjuster()
-        adjuster.fit_distribution(distribution, **kwargs)
-        
-        self.distribution_name = adjuster.distribution_name
-        self.fitted_params = adjuster.fitted_params
-        
+        if isinstance(distribution, str):
+            dist_map = get_available_distributions()
+            name = distribution.lower()
+            if name not in dist_map:
+                raise ValueError(f"Unknown distribution {distribution!r}.")
+            dist_obj = dist_map[name]
+        else:
+            dist_obj = distribution
+            name = getattr(distribution, 'name', str(distribution))
+
+        params = dist_obj.fit(self.data, **kwargs)
+
+        # Wrap as BM EVAFit for consistency
+        self._eva_fit = EVAFit(
+            distribution=dist_obj,
+            name=name,
+            params=tuple(params),
+            data=self.data,
+            method='bm',
+            threshold=None,
+            lambda_rate=None,
+            blocks_per_year=1.0,
+        )
+        self.distribution_name = name
+        self.fitted_params = tuple(params)
         return self
-    
-    def return_value(self, return_period: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+
+    # ------------------------------------------------------------------
+    # Return-level calculations (delegate to EVAFit)
+    # ------------------------------------------------------------------
+
+    def return_value(
+        self, return_period: Union[float, np.ndarray]
+    ) -> np.ndarray:
         """
-        Calculate return value for given return period(s).
-        
-        The return value is the value expected to be exceeded once every
-        T time units on average, where T is the return period.
-        
+        Return value for the given return period(s).
+
+        Dispatches to the correct formula (BM or PoT) based on the last
+        fitted :class:`EVAFit`.
+
         Parameters
         ----------
         return_period : float or array-like
-            Return period(s) in time_unit units (e.g., years)
-            
+            In ``time_unit`` units (typically years).
+
         Returns
         -------
-        float or ndarray
-            Return value(s) corresponding to the return period(s)
-            
-        Examples
-        --------
-        >>> # Single return value
-        >>> rv_100 = extremes.return_value(100)  # 100-year return value
-        >>> 
-        >>> # Multiple return values
-        >>> periods = [10, 50, 100, 500]
-        >>> rv = extremes.return_value(periods)
+        ndarray
         """
-        if self._adjuster is None or self.fitted_params is None:
+        if self._eva_fit is None:
             raise ValueError(
-                "Must fit a distribution before calculating return values. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
+                "Must fit a distribution first. "
+                "Use fit_block_maxima(), fit_pot(), or fit_distribution()."
             )
-        
-        # Convert return period to exceedance probability
-        # P(X > x) = 1/T  =>  P(X <= x) = 1 - 1/T
-        return_period = np.asarray(return_period)
-        exceedance_prob = 1.0 / return_period
-        non_exceedance_prob = 1.0 - exceedance_prob
-        
-        # Calculate quantile (return value) for non-exceedance probability
-        return_values = self._adjuster.ppf(non_exceedance_prob)
-        
-        return return_values
-    
-    def return_period(self, value: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        return self._eva_fit.return_value(return_period)
+
+    def return_period(self, value: Union[float, np.ndarray]) -> np.ndarray:
         """
-        Calculate return period for given value(s).
-        
-        The return period is the average time interval between exceedances
-        of the given value.
-        
+        Return period for the given value(s).
+
         Parameters
         ----------
         value : float or array-like
-            Value(s) for which to calculate return period
-            
+
         Returns
         -------
-        float or ndarray
-            Return period(s) in time_unit units
-            
-        Examples
-        --------
-        >>> # Return period for specific value
-        >>> rp = extremes.return_period(25.0)
-        >>> print(f"A value of 25 has a return period of {rp:.1f} years")
-        >>> 
-        >>> # Return periods for multiple values
-        >>> values = [20, 25, 30, 35]
-        >>> rp = extremes.return_period(values)
+        ndarray
         """
-        if self._adjuster is None or self.fitted_params is None:
+        if self._eva_fit is None:
             raise ValueError(
-                "Must fit a distribution before calculating return periods. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
+                "Must fit a distribution first. "
+                "Use fit_block_maxima(), fit_pot(), or fit_distribution()."
             )
-        
-        # Calculate exceedance probability: P(X > value)
-        value = np.asarray(value)
-        exceedance_prob = 1.0 - self._adjuster.cdf(value)
-        
-        # Return period T = 1 / P(exceedance)
-        # Avoid division by zero
-        return_periods = np.where(
-            exceedance_prob > 0,
-            1.0 / exceedance_prob,
-            np.inf
-        )
-        
-        return return_periods
-    
-    def ppf(self, q: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        return self._eva_fit.return_period(value)
+
+    def return_level_table(self, periods: List[float]) -> List[Dict[str, float]]:
         """
-        Percent point function (inverse of CDF) of the fitted distribution.
-        
+        Serialisable table of return periods and levels (for frontends).
+
         Parameters
         ----------
-        q : float or array-like
-            Probability value(s) between 0 and 1
-            
+        periods : list of float
+
         Returns
         -------
-        float or ndarray
-            Quantile(s) corresponding to the probability value(s)
+        list of dict
         """
-        if self._adjuster is None or self.fitted_params is None:
-            raise ValueError(
-                "Must fit a distribution before using ppf. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
-            )
-        return self._adjuster.ppf(q)
-    
-    def cdf(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """
-        Cumulative distribution function of the fitted distribution.
-        
-        Parameters
-        ----------
-        x : float or array-like
-            Value(s) at which to evaluate the CDF
-            
-        Returns
-        -------
-        float or ndarray
-            Probability value(s) corresponding to x
-        """
-        if self._adjuster is None or self.fitted_params is None:
-            raise ValueError(
-                "Must fit a distribution before using cdf. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
-            )
-        return self._adjuster.cdf(x)
-    
-    def pdf(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """
-        Probability density function of the fitted distribution.
-        
-        Parameters
-        ----------
-        x : float or array-like
-            Value(s) at which to evaluate the PDF
-            
-        Returns
-        -------
-        float or ndarray
-            Probability density value(s) corresponding to x
-        """
-        if self._adjuster is None or self.fitted_params is None:
-            raise ValueError(
-                "Must fit a distribution before using pdf. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
-            )
-        return self._adjuster.pdf(x)
-    
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution first.")
+        return self._eva_fit.return_level_table(periods)
+
+    # ------------------------------------------------------------------
+    # Distribution evaluation helpers
+    # ------------------------------------------------------------------
+
+    def ppf(self, q):
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution first.")
+        return self._eva_fit.ppf(q)
+
+    def cdf(self, x):
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution first.")
+        return self._eva_fit.cdf(x)
+
+    def pdf(self, x):
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution first.")
+        return self._eva_fit.pdf(x)
+
     def goodness_of_fit(self, method: str, **kwargs):
-        """
-        Perform goodness-of-fit test for the fitted distribution.
-        
-        Parameters
-        ----------
-        method : str
-            Test method: 'ks' (Kolmogorov-Smirnov), 'chi2' (Chi-square),
-            'ad' (Anderson-Darling), or 'rmse' (Root Mean Square Error)
-        **kwargs : dict
-            Additional arguments passed to the goodness-of-fit method
-            
-        Returns
-        -------
-        dict or float
-            Test results (dict for statistical tests, float for RMSE)
-            
-        Examples
-        --------
-        >>> extremes.fit_distribution('genextreme')
-        >>> ks_test = extremes.goodness_of_fit('ks')
-        >>> print(f"KS statistic: {ks_test['ks_statistic']:.4f}")
-        >>> print(f"P-value: {ks_test['p_value']:.4f}")
-        """
-        if self._adjuster is None or self.fitted_params is None:
-            raise ValueError(
-                "Must fit a distribution before performing goodness-of-fit test. "
-                "Use extremes.fit_distribution('genextreme') or similar first."
-            )
-        return self._adjuster.goodness_of_fit(method, **kwargs)
-    
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution first.")
+        return self._eva_fit.goodness_of_fit(method, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Extraction methods
+    # ------------------------------------------------------------------
+
     def extract_block_maxima(
         self,
         block_size: str = 'YE',
-        method: str = 'max'
+        method: str = 'max',
     ) -> Tuple[np.ndarray, Optional[pd.DatetimeIndex]]:
         """
-        Extract block maxima (or minima) from time series.
-        
-        This is commonly used for GEV analysis where annual maxima
-        are extracted from the data.
-        
+        Extract block maxima (or minima) from the time series.
+
         Parameters
         ----------
-        block_size : str, default='YE'
-            Block size for resampling. Uses pandas offset aliases:
-            - 'YE' or 'Y': Annual
-            - 'QE': Quarterly
-            - 'ME': Monthly
-            - 'W': Weekly
-            - 'D': Daily
-        method : str, default='max'
-            Aggregation method: 'max' or 'min'
-            
+        block_size : str, default ``'YE'``
+            Pandas offset alias: ``'YE'``/``'Y'`` (annual), ``'QE'`` (quarterly),
+            ``'ME'`` (monthly), ``'W'`` (weekly), ``'D'`` (daily).
+        method : str, default ``'max'``
+            ``'max'`` or ``'min'``.
+
         Returns
         -------
         values : ndarray
-            Block maxima/minima values
         times : DatetimeIndex or None
-            Block center times (if datetime available)
-            
-        Examples
-        --------
-        >>> # Extract annual maxima
-        >>> annual_max, times = extremes.extract_block_maxima(block_size='YE')
-        >>> 
-        >>> # Extract monthly minima
-        >>> monthly_min, times = extremes.extract_block_maxima(block_size='M', method='min')
         """
         if not self.has_datetime:
             raise ValueError(
-                "Block maxima extraction requires datetime information. "
-                "Provide times as datetime array when creating ExtremesAnalyzer."
+                "Block maxima extraction requires datetime information."
             )
-        
-        # Create pandas Series with datetime index
         series = pd.Series(self.data, index=self.times)
-        
-        # Resample and aggregate
         if method == 'max':
             resampled = series.resample(block_size).max()
         elif method == 'min':
             resampled = series.resample(block_size).min()
         else:
-            raise ValueError(f"Unknown method: {method}. Use 'max' or 'min'")
-        
-        # Remove NaN values
+            raise ValueError(f"Unknown method: {method!r}. Use 'max' or 'min'.")
         resampled = resampled.dropna()
-        
         return resampled.values, resampled.index
-    
+
     def peaks_over_threshold(
         self,
         threshold: float,
         min_separation: Optional[Union[str, pd.Timedelta, int, float]] = None,
-        event_wise: bool = False
+        event_wise: bool = False,
     ) -> Tuple[np.ndarray, Optional[Union[pd.DatetimeIndex, np.ndarray]]]:
         """
-        Extract peaks over threshold (POT) from time series.
-        
-        This method is used for GPD (Generalized Pareto Distribution) analysis.
-        
+        Extract peaks over threshold (PoT) from the time series.
+
         Parameters
         ----------
         threshold : float
-            Threshold value for peak detection
         min_separation : str, Timedelta, int, or float, optional
-            Minimum time separation between peaks to avoid clustering.
-            Can be:
-            - String: '1D', '12H', etc. (pandas time string)
-            - pd.Timedelta: pd.Timedelta(days=1)
-            - Numeric: interpreted as days (e.g., 3 means 3 days)
-            - 'event': Use event-wise declustering (requires event_wise=True)
-            If None, all exceedances are returned.
-        event_wise : bool, default=False
-            If True, identifies consecutive periods above threshold as single events
-            and returns only the maximum value from each event. This is useful for
-            identifying storm events where multiple consecutive days exceed the threshold.
-            When True, min_separation is ignored.
-            
+            Minimum time between peaks.  Numeric values are interpreted as days.
+        event_wise : bool, default False
+            If True, return one peak per consecutive exceedance event.
+
         Returns
         -------
         exceedances : ndarray
-            Values exceeding the threshold
         times : DatetimeIndex or ndarray or None
-            Times of exceedances
-            
-        Examples
-        --------
-        >>> # Extract all peaks over threshold
-        >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0)
-        >>> 
-        >>> # Extract peaks with minimum 1-day separation (numeric)
-        >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0, min_separation=1)
-        >>> 
-        >>> # Extract peaks with minimum 1-day separation (string)
-        >>> peaks, times = extremes.peaks_over_threshold(
-        ...     threshold=20.0,
-        ...     min_separation='1D'
-        ... )
-        >>> 
-        >>> # Extract one peak per consecutive event (storm-wise)
-        >>> peaks, times = extremes.peaks_over_threshold(threshold=20.0, event_wise=True)
         """
-        # Find values exceeding threshold
         exceed_mask = self.data > threshold
-        
+
         if not self.has_datetime:
-            exceedances = self.data[exceed_mask]
-            exceed_times = None
             if min_separation is not None or event_wise:
                 warnings.warn(
                     "min_separation and event_wise require datetime information. "
                     "Returning all exceedances without declustering."
                 )
-            return exceedances, exceed_times
-        
-        # Event-wise declustering: identify consecutive periods as single events
+            return self.data[exceed_mask], None
+
         if event_wise:
-            # Create pandas Series for easier manipulation
             series = pd.Series(self.data, index=self.times)
-            
-            # Identify groups of consecutive exceedances
-            # Create a group ID that increments when there's a gap
             exceed_series = series[exceed_mask]
-            
             if len(exceed_series) == 0:
                 return np.array([]), pd.DatetimeIndex([])
-            
-            # Calculate time differences between consecutive exceedances
             time_diffs = exceed_series.index.to_series().diff()
-            
-            # Expected time step (most common difference in original series)
             original_diffs = pd.Series(self.times).diff().dropna()
             expected_step = original_diffs.mode()[0] if len(original_diffs) > 0 else pd.Timedelta(days=1)
-            
-            # A new event starts when the gap is larger than expected step
-            # (i.e., there's at least one day below threshold)
             is_new_event = time_diffs > expected_step
             event_ids = is_new_event.cumsum()
-            
-            # For each event, get the maximum value and its time
-            event_maxima = []
-            event_times = []
-            
-            for event_id in event_ids.unique():
-                event_data = exceed_series[event_ids == event_id]
-                max_idx = event_data.idxmax()
-                event_maxima.append(event_data[max_idx])
-                event_times.append(max_idx)
-            
-            return np.array(event_maxima), pd.DatetimeIndex(event_times)
-        
-        # Regular declustering with min_separation
+            maxima, times_out = [], []
+            for eid in event_ids.unique():
+                event_data = exceed_series[event_ids == eid]
+                idx = event_data.idxmax()
+                maxima.append(event_data[idx])
+                times_out.append(idx)
+            return np.array(maxima), pd.DatetimeIndex(times_out)
+
         exceedances = self.data[exceed_mask]
         exceed_times = self.times[exceed_mask]
-        
+
         if min_separation is None:
             return exceedances, exceed_times
-        
-        # Convert min_separation to Timedelta
+
         if isinstance(min_separation, str):
             min_separation = pd.Timedelta(min_separation)
         elif isinstance(min_separation, (int, float)):
-            # Interpret numeric values as days
             min_separation = pd.Timedelta(days=min_separation)
-        
-        # Decluster algorithm
-        keep_indices = [0]  # Always keep first peak
+
+        keep = [0]
         for i in range(1, len(exceed_times)):
-            time_diff = exceed_times[i] - exceed_times[keep_indices[-1]]
-            if time_diff >= min_separation:
-                keep_indices.append(i)
-        
-        declustered_values = exceedances[keep_indices]
-        declustered_times = exceed_times[keep_indices]
-        
-        return declustered_values, declustered_times
-    
+            if exceed_times[i] - exceed_times[keep[-1]] >= min_separation:
+                keep.append(i)
+
+        return exceedances[keep], exceed_times[keep]
+
     def get_summary_statistics(self) -> Dict[str, Any]:
-        """
-        Get summary statistics for extreme value analysis.
-        
-        Returns
-        -------
-        dict
-            Dictionary with summary statistics including:
-            - n_observations: Number of data points
-            - time_span: Total time span in time_unit units
-            - time_unit: Time unit used for calculations
-            - max: Maximum value in dataset
-            - min: Minimum value in dataset
-            - mean: Mean value
-            - std: Standard deviation
-            - percentile_95: 95th percentile
-            - percentile_99: 99th percentile
-            - has_datetime: Whether datetime information is available
-            - distribution_name: Fitted distribution name (if fitted)
-            - distribution_params: Fitted parameters (if fitted)
-        """
+        """Basic summary statistics of the full dataset."""
         summary = {
             'n_observations': len(self.data),
             'time_span': self.time_span,
@@ -628,102 +685,19 @@ class ExtremesAnalyzer:
             'percentile_95': float(np.percentile(self.data, 95)),
             'percentile_99': float(np.percentile(self.data, 99)),
             'has_datetime': self.has_datetime,
-            'distribution_name': self.distribution_name
+            'distribution_name': self.distribution_name,
         }
-        
         if self.has_datetime:
             summary['start_date'] = str(self.times[0])
             summary['end_date'] = str(self.times[-1])
-        
         if self.fitted_params is not None:
             summary['distribution_params'] = self.fitted_params
-            
         return summary
-    
-    def plot_return_levels(
-        self,
-        ax=None,
-        return_periods: Optional[np.ndarray] = None,
-        empirical: bool = True,
-        confidence_level: Optional[float] = None,
-        title: Optional[str] = None
-    ):
-        """
-        Plot return level plot (return value vs return period).
-        
-        Parameters
-        ----------
-        ax : matplotlib.axes.Axes, optional
-            Axes object to plot on. If None, creates a new figure and axes.
-        return_periods : array-like, optional
-            Return periods to plot. If None, uses logarithmic spacing.
-        empirical : bool, default=True
-            Whether to include empirical return values
-        confidence_level : float, optional
-            Confidence level for confidence intervals (e.g., 0.95)
-        title : str, optional
-            Plot title. If None, uses default title.
-            
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            Figure object (None if ax was provided)
-        ax : matplotlib.axes.Axes
-            Axes object
-            
-        Examples
-        --------
-        >>> # Create standalone plot
-        >>> fig, ax = extremes.plot_return_levels()
-        >>> 
-        >>> # Plot on existing axes
-        >>> fig, ax = plt.subplots()
-        >>> extremes.plot_return_levels(ax=ax, title='Custom Title')
-        """
-        import matplotlib.pyplot as plt
-        
-        if self._adjuster is None or self.fitted_params is None:
-            raise ValueError("Must fit a distribution before plotting return levels")
-        
-        # Create figure if ax not provided
-        if ax is None:
-            fig, ax = plt.subplots(figsize=(10, 6))
-        else:
-            fig = None
-        
-        # Default return periods
-        if return_periods is None:
-            return_periods = np.logspace(0, 3, 50)  # 1 to 1000
-        
-        # Calculate theoretical return values
-        theoretical_rv = self.return_value(return_periods)
-        
-        # Plot theoretical curve
-        ax.plot(return_periods, theoretical_rv, 'r-', linewidth=2, 
-                label=f'Theoretical ({self.distribution_name})')
-        
-        # Plot empirical points if requested
-        if empirical:
-            # Sort data and calculate empirical return periods
-            sorted_data = np.sort(self.data)[::-1]  # Descending order
-            n = len(sorted_data)
-            empirical_rp = (n + 1) / np.arange(1, n + 1)
-            
-            ax.plot(empirical_rp, sorted_data, 'bo', alpha=0.6, 
-                   markersize=4, label='Empirical')
-        
-        ax.set_xlabel(f'Return Period ({self.time_unit})')
-        ax.set_ylabel('Return Value')
-        ax.set_title(title if title else 'Return Level Plot')
-        ax.set_xscale('log')
-        ax.grid(True, alpha=0.3, which='both')
-        ax.legend()
-        
-        if fig is not None:
-            plt.tight_layout()
-        
-        return fig, ax
-    
+
+    # ------------------------------------------------------------------
+    # Threshold search
+    # ------------------------------------------------------------------
+
     def find_optimal_pot_threshold(
         self,
         min_samples: int = 50,
@@ -735,296 +709,214 @@ class ExtremesAnalyzer:
         separation_step_hours: float = 24,
         vary_first: str = 'percentile',
         max_iterations: int = 200,
-        verbose: bool = False
+        verbose: bool = False,
     ) -> Dict[str, Any]:
         """
-        Find optimal POT threshold ensuring sufficient independent samples.
-        
-        This function systematically searches for a threshold that provides
-        at least `min_samples` independent exceedances after declustering.
-        The search can prioritize varying percentiles or time separation first.
-        
+        Search for a PoT threshold yielding at least *min_samples* independent peaks.
+
         Parameters
         ----------
-        min_samples : int, default=50
-            Minimum number of independent exceedances required
-        percentile_min : float, default=90
-            Minimum percentile to test (lower bound)
-        percentile_max : float, default=99
-            Maximum percentile to test (upper bound, starting point)
-        percentile_step : float, default=1.0
-            Step size for decreasing percentile
-        min_separation_hours : float, default=48
-            Minimum time separation between peaks in hours (starting point)
-        max_separation_hours : float, default=120
-            Maximum time separation to test in hours
-        separation_step_hours : float, default=24
-            Step size for increasing separation in hours
-        vary_first : str, default='percentile'
-            Which parameter to vary first: 'percentile' or 'separation'
-            - 'percentile': Varies percentile from max to min, then increases separation
-            - 'separation': Varies separation from min to max, then decreases percentile
-        max_iterations : int, default=200
-            Maximum total search iterations to prevent infinite loops
-        verbose : bool, default=False
-            Print progress information during search
-            
+        min_samples : int, default 50
+        percentile_min : float, default 90
+        percentile_max : float, default 99
+        percentile_step : float, default 1.0
+        min_separation_hours : float, default 48
+        max_separation_hours : float, default 120
+        separation_step_hours : float, default 24
+        vary_first : str, default ``'percentile'``
+            ``'percentile'`` or ``'separation'``.
+        max_iterations : int, default 200
+        verbose : bool, default False
+
         Returns
         -------
         dict
-            Dictionary with keys:
-            - 'threshold': Selected threshold value (float)
-            - 'percentile': Percentile of threshold (float)
-            - 'separation_hours': Time separation used in hours (float)
-            - 'n_raw_exceedances': Total exceedances before declustering (int)
-            - 'n_independent': Independent exceedances after declustering (int)
-            - 'exceedances': Array of independent exceedance values (ndarray)
-            - 'exceedance_times': Times of independent exceedances (DatetimeIndex or ndarray)
-            - 'success': Whether minimum samples achieved (bool)
-            - 'iterations': Number of iterations performed (int)
-            - 'warning': Warning message if any (str, optional)
-            
-        Examples
-        --------
-        >>> # Default search (vary percentile first, 99->90, then increase separation)
-        >>> result = extremes.find_optimal_pot_threshold(min_samples=50)
-        >>> print(f"Threshold: {result['threshold']:.2f}")
-        >>> print(f"Independent samples: {result['n_independent']}")
-        >>> 
-        >>> # Vary separation first, then percentile
-        >>> result = extremes.find_optimal_pot_threshold(
-        ...     min_samples=50,
-        ...     vary_first='separation'
-        ... )
-        >>> 
-        >>> # Custom percentile and separation ranges
-        >>> result = extremes.find_optimal_pot_threshold(
-        ...     min_samples=30,
-        ...     percentile_min=85,
-        ...     percentile_max=98,
-        ...     min_separation_hours=24,
-        ...     max_separation_hours=96,
-        ...     verbose=True
-        ... )
-        
-        Notes
-        -----
-        **Search Strategy:**
-        
-        When `vary_first='percentile'` (default):
-        1. Start with min_separation_hours and percentile_max
-        2. Decrease percentile by percentile_step until percentile_min
-        3. If not enough samples, increase separation by separation_step_hours
-        4. Repeat percentile search with new separation
-        5. Continue until max_separation_hours or min_samples achieved
-        
-        When `vary_first='separation'`:
-        1. Start with percentile_max and min_separation_hours
-        2. Increase separation by separation_step_hours until max_separation_hours
-        3. If not enough samples, decrease percentile by percentile_step
-        4. Repeat separation search with new percentile
-        5. Continue until percentile_min or min_samples achieved
-        
-        **Best Practices:**
-        - For synoptic events (storms): min_separation_hours >= 48
-        - For sub-daily events: min_separation_hours >= 12
-        - Typical percentile range: 90-99 for extremes
-        - Ensure min_samples >= 30 for reliable fitting (50+ recommended)
+            Keys: ``'threshold'``, ``'percentile'``, ``'separation_hours'``,
+            ``'n_raw_exceedances'``, ``'n_independent'``, ``'exceedances'``,
+            ``'exceedance_times'``, ``'success'``, ``'iterations'``.
         """
         if not self.has_datetime:
             raise ValueError(
-                "POT threshold search requires datetime information. "
-                "Provide times when creating ExtremesAnalyzer."
+                "POT threshold search requires datetime information."
             )
-        
-        if vary_first not in ['percentile', 'separation']:
-            raise ValueError("vary_first must be 'percentile' or 'separation'")
-        
-        # Validate ranges
+        if vary_first not in ('percentile', 'separation'):
+            raise ValueError("vary_first must be 'percentile' or 'separation'.")
         if percentile_min >= percentile_max:
-            raise ValueError("percentile_min must be < percentile_max")
+            raise ValueError("percentile_min must be < percentile_max.")
         if min_separation_hours >= max_separation_hours:
-            raise ValueError("min_separation_hours must be < max_separation_hours")
-        
-        # Initialize search variables
+            raise ValueError("min_separation_hours must be < max_separation_hours.")
+
         iteration = 0
         best_result = None
-        
+
         if vary_first == 'percentile':
-            # Strategy: Vary percentile first, then increase separation
-            separations = np.arange(min_separation_hours, max_separation_hours + 1, 
-                                   separation_step_hours)
-            
-            for separation_hours in separations:
+            separations = np.arange(min_separation_hours, max_separation_hours + 1,
+                                    separation_step_hours)
+            for sep_h in separations:
                 if verbose:
-                    print(f"\n--- Testing separation: {separation_hours}h ---")
-                
-                # Test percentiles from max to min
-                current_percentile = percentile_max
-                
-                while current_percentile >= percentile_min:
+                    print(f"\n--- separation: {sep_h}h ---")
+                current_pct = percentile_max
+                while current_pct >= percentile_min:
                     iteration += 1
-                    
                     if iteration > max_iterations:
                         break
-                    
-                    # Calculate threshold
-                    threshold = np.percentile(self.data, current_percentile)
-                    
-                    # Count raw exceedances
-                    n_raw = (self.data > threshold).sum()
-                    
+                    u = float(np.percentile(self.data, current_pct))
+                    n_raw = int((self.data > u).sum())
                     if n_raw == 0:
-                        current_percentile -= percentile_step
+                        current_pct -= percentile_step
                         continue
-                    
                     try:
-                        # Extract POT with current separation
-                        sep_days = separation_hours / 24
-                        exceedances, exc_times = self.peaks_over_threshold(
-                            threshold=threshold,
-                            min_separation=sep_days
-                        )
-                        
-                        n_independent = len(exceedances)
-                        
-                        # Store result
+                        exc, exc_t = self.peaks_over_threshold(
+                            threshold=u, min_separation=sep_h / 24)
+                        n_ind = len(exc)
                         result = {
-                            'threshold': threshold,
-                            'percentile': current_percentile,
-                            'separation_hours': separation_hours,
+                            'threshold': u,
+                            'percentile': current_pct,
+                            'separation_hours': sep_h,
                             'n_raw_exceedances': n_raw,
-                            'n_independent': n_independent,
-                            'exceedances': exceedances,
-                            'exceedance_times': exc_times,
-                            'success': n_independent >= min_samples,
-                            'iterations': iteration
+                            'n_independent': n_ind,
+                            'exceedances': exc,
+                            'exceedance_times': exc_t,
+                            'success': n_ind >= min_samples,
+                            'iterations': iteration,
                         }
-                        
-                        # Update best result
-                        if best_result is None or n_independent > best_result['n_independent']:
+                        if best_result is None or n_ind > best_result['n_independent']:
                             best_result = result.copy()
-                        
                         if verbose:
-                            status = "✓" if result['success'] else "•"
-                            print(f"{status} p={current_percentile:.1f}, "
-                                  f"thresh={threshold:.2f}, n={n_independent}")
-                        
-                        # Check if we found enough samples
-                        if n_independent >= min_samples:
+                            print(f"{'✓' if result['success'] else '•'} "
+                                  f"p={current_pct:.1f}, thresh={u:.2f}, n={n_ind}")
+                        if n_ind >= min_samples:
                             return result
-                        
                     except Exception as e:
                         if verbose:
-                            print(f"✗ p={current_percentile:.1f}: {str(e)}")
-                    
-                    # Decrease percentile
-                    current_percentile -= percentile_step
-                
+                            print(f"✗ p={current_pct:.1f}: {e}")
+                    current_pct -= percentile_step
                 if iteration > max_iterations:
                     break
-        
-        else:  # vary_first == 'separation'
-            # Strategy: Vary separation first, then decrease percentile
-            percentiles = np.arange(percentile_max, percentile_min - percentile_step, 
-                                   -percentile_step)
-            
-            for percentile in percentiles:
+
+        else:  # vary separation first
+            percentiles = np.arange(percentile_max, percentile_min - percentile_step,
+                                    -percentile_step)
+            for pct in percentiles:
                 if verbose:
-                    print(f"\n--- Testing percentile: {percentile:.1f} ---")
-                
-                # Test separations from min to max
-                current_separation = min_separation_hours
-                
-                while current_separation <= max_separation_hours:
+                    print(f"\n--- percentile: {pct:.1f} ---")
+                current_sep = min_separation_hours
+                while current_sep <= max_separation_hours:
                     iteration += 1
-                    
                     if iteration > max_iterations:
                         break
-                    
-                    # Calculate threshold
-                    threshold = np.percentile(self.data, percentile)
-                    
-                    # Count raw exceedances
-                    n_raw = (self.data > threshold).sum()
-                    
+                    u = float(np.percentile(self.data, pct))
+                    n_raw = int((self.data > u).sum())
                     if n_raw == 0:
-                        break  # No exceedances at this percentile
-                    
+                        break
                     try:
-                        # Extract POT with current separation
-                        sep_days = current_separation / 24
-                        exceedances, exc_times = self.peaks_over_threshold(
-                            threshold=threshold,
-                            min_separation=sep_days
-                        )
-                        
-                        n_independent = len(exceedances)
-                        
-                        # Store result
+                        exc, exc_t = self.peaks_over_threshold(
+                            threshold=u, min_separation=current_sep / 24)
+                        n_ind = len(exc)
                         result = {
-                            'threshold': threshold,
-                            'percentile': percentile,
-                            'separation_hours': current_separation,
+                            'threshold': u,
+                            'percentile': pct,
+                            'separation_hours': current_sep,
                             'n_raw_exceedances': n_raw,
-                            'n_independent': n_independent,
-                            'exceedances': exceedances,
-                            'exceedance_times': exc_times,
-                            'success': n_independent >= min_samples,
-                            'iterations': iteration
+                            'n_independent': n_ind,
+                            'exceedances': exc,
+                            'exceedance_times': exc_t,
+                            'success': n_ind >= min_samples,
+                            'iterations': iteration,
                         }
-                        
-                        # Update best result
-                        if best_result is None or n_independent > best_result['n_independent']:
+                        if best_result is None or n_ind > best_result['n_independent']:
                             best_result = result.copy()
-                        
                         if verbose:
-                            status = "✓" if result['success'] else "•"
-                            print(f"{status} sep={current_separation}h, "
-                                  f"thresh={threshold:.2f}, n={n_independent}")
-                        
-                        # Check if we found enough samples
-                        if n_independent >= min_samples:
+                            print(f"{'✓' if result['success'] else '•'} "
+                                  f"sep={current_sep}h, thresh={u:.2f}, n={n_ind}")
+                        if n_ind >= min_samples:
                             return result
-                        
                     except Exception as e:
                         if verbose:
-                            print(f"✗ sep={current_separation}h: {str(e)}")
-                    
-                    # Increase separation
-                    current_separation += separation_step_hours
-                
+                            print(f"✗ sep={current_sep}h: {e}")
+                    current_sep += separation_step_hours
                 if iteration > max_iterations:
                     break
-        
-        # No solution found meeting min_samples requirement
+
+        # No solution meeting min_samples
         if best_result is None:
-            # Return empty result
             return {
-                'threshold': np.nan,
-                'percentile': np.nan,
-                'separation_hours': np.nan,
-                'n_raw_exceedances': 0,
-                'n_independent': 0,
+                'threshold': np.nan, 'percentile': np.nan, 'separation_hours': np.nan,
+                'n_raw_exceedances': 0, 'n_independent': 0,
                 'exceedances': np.array([]),
                 'exceedance_times': pd.DatetimeIndex([]) if self.has_datetime else None,
-                'success': False,
-                'iterations': iteration,
-                'warning': 'No exceedances found in search range'
+                'success': False, 'iterations': iteration,
+                'warning': 'No exceedances found in search range',
             }
-        
-        # Return best effort result
+
         best_result['warning'] = (
             f"Could not find threshold with {min_samples} samples. "
-            f"Best result: {best_result['n_independent']} samples. "
-            f"Consider relaxing constraints."
+            f"Best: {best_result['n_independent']} samples. Relax constraints."
         )
-        
         if verbose:
             print(f"\n⚠️  {best_result['warning']}")
-        
         return best_result
-    
+
+    # ------------------------------------------------------------------
+    # Visualisation (optional convenience)
+    # ------------------------------------------------------------------
+
+    def plot_return_levels(
+        self,
+        ax=None,
+        return_periods: Optional[np.ndarray] = None,
+        empirical: bool = True,
+        title: Optional[str] = None,
+    ):
+        """
+        Plot return level diagram (convenience wrapper).
+
+        Parameters
+        ----------
+        ax : matplotlib Axes, optional
+        return_periods : array-like, optional
+        empirical : bool, default True
+        title : str, optional
+
+        Returns
+        -------
+        (fig, ax)
+        """
+        import matplotlib.pyplot as plt  # lazy import
+
+        if self._eva_fit is None:
+            raise ValueError("Must fit a distribution before plotting.")
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+        else:
+            fig = None
+
+        if return_periods is None:
+            return_periods = np.logspace(0, 3, 50)
+
+        theoretical_rv = self.return_value(return_periods)
+        ax.plot(return_periods, theoretical_rv, 'r-', linewidth=2,
+                label=f'Theoretical ({self.distribution_name})')
+
+        if empirical:
+            sorted_data = np.sort(self.data)[::-1]
+            n = len(sorted_data)
+            empirical_rp = (n + 1) / np.arange(1, n + 1)
+            ax.plot(empirical_rp, sorted_data, 'bo', alpha=0.6,
+                    markersize=4, label='Empirical')
+
+        ax.set_xlabel(f'Return Period ({self.time_unit})')
+        ax.set_ylabel('Return Value')
+        ax.set_title(title or 'Return Level Plot')
+        ax.set_xscale('log')
+        ax.grid(True, alpha=0.3, which='both')
+        ax.legend()
+
+        if fig is not None:
+            plt.tight_layout()
+        return fig, ax
+
     @staticmethod
     def plot_directional_return_values(
         directional_results: Dict[str, Dict[str, Any]],
@@ -1033,300 +925,148 @@ class ExtremesAnalyzer:
         overlay: bool = False,
         show_values: bool = True,
         figsize: tuple = None,
-        title: str = None
+        title: str = None,
     ) -> tuple:
         """
-        Create polar plots of return values by direction.
-        
-        This method creates polar plots showing how return values vary by wind
-        direction for different return periods. Can create separate subplots for
-        each return period or overlay all periods in a single plot.
-        
+        Polar plots of return values by direction.
+
         Parameters
         ----------
         directional_results : dict
-            Dictionary with sector names as keys and result dictionaries as values.
-            Each result dictionary must contain:
-            - 'center_deg': Center angle of sector in degrees
-            - 'return_values': Dictionary mapping return periods to values
-            - 'success': Boolean indicating if fit was successful
-        return_periods : list of int, optional
-            Return periods to plot (max 4). If None, uses [10, 20, 50, 100].
-            Examples: [10, 50], [1, 5, 10, 20], [100]
-        colors : list of str, optional
-            Colors for each return period. If None, uses default palette.
-            Must have same length as return_periods.
-        overlay : bool, default=False
-            If True, plot all return periods on single polar plot.
-            If False, create separate subplot for each return period.
-        show_values : bool, default=True
-            If True, display numeric values on the plot.
+        return_periods : list, optional
+        colors : list, optional
+        overlay : bool, default False
+        show_values : bool, default True
         figsize : tuple, optional
-            Figure size (width, height). If None, automatically determined.
         title : str, optional
-            Main figure title. If None, uses default title.
-        
+
         Returns
         -------
-        fig : matplotlib.figure.Figure
-            The figure object
-        axes : matplotlib.axes.Axes or array of Axes
-            The axes object(s)
-        
-        Raises
-        ------
-        ValueError
-            If return_periods has more than 4 values
-            If colors length doesn't match return_periods length
-            If directional_results is empty or invalid
-        
-        Examples
-        --------
-        >>> # Assuming you have fitted distributions for each sector
-        >>> directional_results = {}
-        >>> for sector in sectors:
-        ...     # ... fit distribution and calculate return values ...
-        ...     directional_results[sector] = {
-        ...         'center_deg': center_angle,
-        ...         'return_values': {10: rv10, 50: rv50, 100: rv100},
-        ...         'success': True
-        ...     }
-        >>> 
-        >>> # Create separate subplots for each return period
-        >>> fig, axes = extremes.plot_directional_return_values(
-        ...     directional_results,
-        ...     return_periods=[10, 50, 100]
-        ... )
-        >>> 
-        >>> # Create single overlay plot
-        >>> fig, ax = extremes.plot_directional_return_values(
-        ...     directional_results,
-        ...     return_periods=[10, 50, 100],
-        ...     overlay=True
-        ... )
-        >>> 
-        >>> # Customize colors and appearance
-        >>> fig, axes = extremes.plot_directional_return_values(
-        ...     directional_results,
-        ...     return_periods=[20, 100],
-        ...     colors=['#FF6B6B', '#4ECDC4'],
-        ...     figsize=(12, 6)
-        ... )
-        >>> plt.show()
-        
-        Notes
-        -----
-        - Maximum 4 return periods can be plotted
-        - If return_periods <= 2 and not overlay, creates single row of subplots
-        - If return_periods == 1 and not overlay, creates single subplot
-        - In overlay mode, all periods shown on one polar plot with legend
-        - Automatically handles missing/failed sectors
+        (fig, axes)
         """
-        import matplotlib.pyplot as plt
-        
-        # Validate inputs
+        import matplotlib.pyplot as plt  # lazy import
+
         if not directional_results:
-            raise ValueError("directional_results cannot be empty")
-        
-        # Default return periods
+            raise ValueError("directional_results cannot be empty.")
         if return_periods is None:
             return_periods = [10, 20, 50, 100]
-        
-        # Validate return periods
         if len(return_periods) > 4:
-            raise ValueError("Maximum 4 return periods can be plotted")
-        if len(return_periods) == 0:
-            raise ValueError("At least one return period must be specified")
-        
-        # Default colors
+            raise ValueError("Maximum 4 return periods can be plotted.")
+        if not return_periods:
+            raise ValueError("At least one return period must be specified.")
         if colors is None:
-            default_colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
-            colors = default_colors[:len(return_periods)]
+            colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D'][:len(return_periods)]
         elif len(colors) != len(return_periods):
-            raise ValueError("Number of colors must match number of return periods")
-        
-        # Extract sector information and sort by angle (not alphabetically)
-        # This ensures the polar plot forms a proper circle
-        sector_data = []
-        for sector_name, result in directional_results.items():
-            if 'center_deg' in result:
-                sector_data.append((sector_name, result['center_deg']))
-        
-        # Sort by angle to get proper circular order
+            raise ValueError("Number of colors must match number of return periods.")
+
+        sector_data = [
+            (name, res['center_deg'])
+            for name, res in directional_results.items()
+            if 'center_deg' in res
+        ]
         sector_data.sort(key=lambda x: x[1])
-        sector_names = [name for name, _ in sector_data]
-        
+        sector_names = [n for n, _ in sector_data]
         if not sector_names:
-            raise ValueError("No sectors found in directional_results")
-        
-        # Determine subplot layout
+            raise ValueError("No sectors found in directional_results.")
+
         n_periods = len(return_periods)
-        
+
         if overlay:
-            # Single plot with all periods overlaid
-            if figsize is None:
-                figsize = (10, 10)
-            
+            figsize = figsize or (10, 10)
             fig = plt.figure(figsize=figsize)
             ax = fig.add_subplot(111, projection='polar')
             axes = ax
-            
-            # Plot each return period
             for i, rp in enumerate(return_periods):
-                angles = []
-                values = []
-                
-                for sector_name in sector_names:
-                    result = directional_results[sector_name]
-                    if result.get('success', False) and 'return_values' in result:
-                        rv_dict = result['return_values']
-                        if rp in rv_dict and not np.isnan(rv_dict[rp]):
-                            angle_center = result['center_deg']
-                            angles.append(np.deg2rad(angle_center))
-                            values.append(rv_dict[rp])
-                
+                angles, values = [], []
+                for sn in sector_names:
+                    res = directional_results[sn]
+                    if res.get('success') and 'return_values' in res:
+                        rv = res['return_values'].get(rp)
+                        if rv is not None and not np.isnan(rv):
+                            angles.append(np.deg2rad(res['center_deg']))
+                            values.append(rv)
                 if angles:
-                    # Close the plot
                     angles.append(angles[0])
                     values.append(values[0])
-                    
-                    # Plot line
                     ax.plot(angles, values, 'o-', linewidth=2.5, markersize=8,
-                           color=colors[i], label=f'{rp}-year', alpha=0.8)
+                            color=colors[i], label=f'{rp}-year', alpha=0.8)
                     ax.fill(angles, values, alpha=0.15, color=colors[i])
-            
-            # Format
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
-            if title is None:
-                title = 'Return Values by Direction'
-            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+            ax.set_title(title or 'Return Values by Direction',
+                         fontsize=14, fontweight='bold', pad=20)
             ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=10)
             ax.grid(True, alpha=0.3)
-            
-            # Add value labels if requested
-            if show_values:
-                for i, rp in enumerate(return_periods):
-                    angles = []
-                    values = []
-                    
-                    for sector_name in sector_names:
-                        result = directional_results[sector_name]
-                        if result.get('success', False) and 'return_values' in result:
-                            rv_dict = result['return_values']
-                            if rp in rv_dict and not np.isnan(rv_dict[rp]):
-                                angle_center = result['center_deg']
-                                angles.append(np.deg2rad(angle_center))
-                                values.append(rv_dict[rp])
-                    
-                    if angles and i == 0:  # Only show values for first period to avoid clutter
-                        # Create text box per sector with all values
-                        for j, (angle, _) in enumerate(zip(angles, values)):
-                            sector_name = sector_names[j]
-                            result = directional_results[sector_name]
-                            rv_dict = result.get('return_values', {})
-                            
-                            # Build text with all return periods
-                            text_lines = []
-                            for rp_val in return_periods:
-                                if rp_val in rv_dict and not np.isnan(rv_dict[rp_val]):
-                                    text_lines.append(f'{rp_val}yr: {rv_dict[rp_val]:.1f}')
-                            
-                            if text_lines:
-                                text = '\n'.join(text_lines)
-                                # Position text slightly outside the plot
-                                max_val = max([v for v in values if not np.isnan(v)])
-                                r_pos = max_val * 1.15
-                                ax.text(angle, r_pos, text, ha='center', va='center',
-                                       fontsize=7, bbox=dict(boxstyle='round,pad=0.3',
-                                       facecolor='white', alpha=0.8, edgecolor='gray'))
-            
         else:
-            # Separate subplots for each return period
             if n_periods == 1:
-                # Single subplot
-                if figsize is None:
-                    figsize = (8, 8)
+                figsize = figsize or (8, 8)
                 fig = plt.figure(figsize=figsize)
                 axes = [fig.add_subplot(111, projection='polar')]
-                nrows, ncols = 1, 1
             elif n_periods == 2:
-                # Single row
-                if figsize is None:
-                    figsize = (14, 6)
+                figsize = figsize or (14, 6)
                 fig, axes = plt.subplots(1, 2, figsize=figsize,
-                                        subplot_kw=dict(projection='polar'))
+                                         subplot_kw=dict(projection='polar'))
                 axes = axes.flatten()
             else:
-                # Grid layout (2 rows)
-                if figsize is None:
-                    figsize = (14, 10)
-                nrows = 2
-                ncols = 2
-                fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
-                                        subplot_kw=dict(projection='polar'))
+                figsize = figsize or (14, 10)
+                fig, axes = plt.subplots(2, 2, figsize=figsize,
+                                         subplot_kw=dict(projection='polar'))
                 axes = axes.flatten()
-            
-            # Plot each return period
+
             for i, rp in enumerate(return_periods):
                 ax = axes[i]
-                
-                # Get return values for this period
-                angles = []
-                values = []
-                
-                for sector_name in sector_names:
-                    result = directional_results[sector_name]
-                    if result.get('success', False) and 'return_values' in result:
-                        rv_dict = result['return_values']
-                        if rp in rv_dict and not np.isnan(rv_dict[rp]):
-                            angle_center = result['center_deg']
-                            angles.append(np.deg2rad(angle_center))
-                            values.append(rv_dict[rp])
-                
+                angles, values = [], []
+                for sn in sector_names:
+                    res = directional_results[sn]
+                    if res.get('success') and 'return_values' in res:
+                        rv = res['return_values'].get(rp)
+                        if rv is not None and not np.isnan(rv):
+                            angles.append(np.deg2rad(res['center_deg']))
+                            values.append(rv)
                 if not angles:
                     ax.text(0.5, 0.5, 'No data available',
-                           ha='center', va='center', transform=ax.transAxes)
+                            ha='center', va='center', transform=ax.transAxes)
                     continue
-                
-                # Close the plot
                 angles.append(angles[0])
                 values.append(values[0])
-                
-                # Plot
                 ax.plot(angles, values, 'o-', linewidth=2.5, markersize=8,
-                       color=colors[i], alpha=0.8)
+                        color=colors[i], alpha=0.8)
                 ax.fill(angles, values, alpha=0.25, color=colors[i])
-                
-                # Format
                 ax.set_theta_zero_location('N')
                 ax.set_theta_direction(-1)
                 ax.set_title(f'{rp}-Year Return Value', fontsize=12,
-                           fontweight='bold', pad=20)
+                             fontweight='bold', pad=20)
                 ax.set_xticks(np.deg2rad(np.arange(0, 360, 45)))
                 ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'])
                 ax.grid(True, alpha=0.3)
-                
-                # Add value labels if requested
                 if show_values:
                     for angle, value in zip(angles[:-1], values[:-1]):
                         if not np.isnan(value):
                             ax.text(angle, value * 1.1, f'{value:.1f}',
-                                   ha='center', va='center', fontsize=8,
-                                   bbox=dict(boxstyle='round,pad=0.3',
-                                           facecolor='white', alpha=0.8))
-            
-            # Set main title
-            if title is None:
-                title = 'Return Values by Direction (m/s)'
-            fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
-        
+                                    ha='center', va='center', fontsize=8,
+                                    bbox=dict(boxstyle='round,pad=0.3',
+                                              facecolor='white', alpha=0.8))
+            fig.suptitle(title or 'Return Values by Direction (m/s)',
+                         fontsize=14, fontweight='bold', y=0.98)
+
         plt.tight_layout()
-        
         return fig, axes
-    
+
     def __repr__(self) -> str:
-        """String representation of the analyzer."""
-        dist_info = f", distribution={self.distribution_name}" if self.distribution_name else ""
-        time_info = f", time_span={self.time_span:.1f} {self.time_unit}"
-        return f"ExtremesAnalyzer(n_points={len(self.data)}{time_info}{dist_info})"
+        dist = f", distribution={self.distribution_name}" if self.distribution_name else ""
+        return f"ExtremesAnalyzer(n_points={len(self.data)}, time_span={self.time_span:.1f} {self.time_unit}{dist})"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _check_eva_family(method: str, distribution: str):
+    """Raise ValueError if *distribution* is not in EVA_FAMILIES[method]."""
+    allowed = EVA_FAMILIES.get(method, [])
+    if distribution.lower() not in allowed:
+        raise ValueError(
+            f"Distribution {distribution!r} is not valid for method {method!r}. "
+            f"Allowed: {allowed}. "
+            f"Use one of the theoretically justified families for extreme value analysis."
+        )
