@@ -14,7 +14,7 @@ __author__ = "Danilo Couto de Souza"
 __email__ = "danilo.oceano@gmail.com"
 
 # Main imports
-from .core import DataProcessor
+from .core import DataProcessor, FitResult
 
 
 def read_data(data: Union[np.ndarray, list, pd.Series, pd.DataFrame]) -> DataProcessor:
@@ -51,5 +51,6 @@ def read_data(data: Union[np.ndarray, list, pd.Series, pd.DataFrame]) -> DataPro
 # Package metadata
 __all__ = [
     "DataProcessor",
+    "FitResult",
     "read_data",
 ]

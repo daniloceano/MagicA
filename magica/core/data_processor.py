@@ -4,341 +4,231 @@ Data processor for statistical analysis
 
 import numpy as np
 import pandas as pd
-from typing import Union, Optional, Dict, Any, Tuple
+from typing import Union, Optional, Dict, Any
 import warnings
 
 
 class DataProcessor:
     """
-    Simple class for loading and basic processing of numerical data.
-    
-    This class provides basic methods to load and validate numerical data
-    for statistical analysis, converting data to numpy arrays.
+    Container for numerical data and entry point for statistical analysis.
+
+    Loads and validates array-like data, providing access to distribution
+    fitting (:meth:`fit`), auto-fitting (:meth:`get_auto_fitter`), extreme
+    value analysis (:meth:`get_extremes_analyzer`), and Monte Carlo stability
+    analysis via the underlying :class:`~magica.core.magic_adjuster.MagicAdjuster`.
     """
-    
+
     def __init__(self, data: Union[np.ndarray, list, pd.Series, pd.DataFrame] = None):
         """
-        Initialize the data processor.
-        
         Parameters
         ----------
         data : array-like, optional
-            Data to be processed. Can be:
-            - numpy array
-            - list of values  
-            - pandas Series
-            - pandas DataFrame (will be flattened)
+            Numpy array, list, pandas Series, or DataFrame.
         """
         self.data = None
-        self.metadata = {}
-        
-        # Store original data to preserve datetime index for extremes analysis
-        self._original_data = None
-        
-        # Internal adjuster for distribution fitting
-        self._adjuster = None
-        
+        self.metadata: Dict[str, Any] = {}
+        self._original_data = None  # preserved for extremes datetime extraction
+
         if data is not None:
             self.load_data(data)
-        
-    def load_data(self, data: Union[np.ndarray, list, pd.Series, pd.DataFrame]) -> 'DataProcessor':
+
+    def load_data(
+        self, data: Union[np.ndarray, list, pd.Series, pd.DataFrame]
+    ) -> 'DataProcessor':
         """
-        Load data and convert to numpy array.
-        
+        Load and validate data, converting to a 1-D numpy array.
+
+        NaN values are removed with a warning.
+
         Parameters
         ----------
         data : array-like
-            Data to be loaded. Can be:
-            - numpy array
-            - list of values
-            - pandas Series
-            - pandas DataFrame (will be flattened)
-            
+
         Returns
         -------
         DataProcessor
-            Processor instance with loaded data
         """
-        # Store original data before conversion
         self._original_data = data
-        
+
         if isinstance(data, np.ndarray):
-            self.data = data.flatten() if data.ndim > 1 else data.copy()
-            
+            self.data = data.flatten() if data.ndim > 1 else data
         elif isinstance(data, list):
             self.data = np.array(data, dtype=float)
-            
         elif isinstance(data, pd.Series):
             self.data = data.values
-            
         elif isinstance(data, pd.DataFrame):
             self.data = data.values.flatten()
-            
         else:
-            # Try to convert any array-like object
             try:
                 self.data = np.array(data, dtype=float).flatten()
             except (ValueError, TypeError):
-                raise TypeError(f"Cannot convert data of type {type(data)} to numpy array.")
-        
-        # Remove NaN values and warn if any were found
+                raise TypeError(f"Cannot convert type {type(data)} to numpy array.")
+
         if np.any(np.isnan(self.data)):
-            n_nan = np.sum(np.isnan(self.data))
+            n_nan = int(np.sum(np.isnan(self.data)))
             warnings.warn(f"Found {n_nan} NaN values. They will be removed.")
             self.data = self.data[~np.isnan(self.data)]
-        
+
         if len(self.data) == 0:
             raise ValueError("No valid data points after removing NaN values.")
-            
+
         self._update_metadata()
         return self
-    
+
+    # ------------------------------------------------------------------
+    # Data access
+    # ------------------------------------------------------------------
+
     def get_data_array(self) -> np.ndarray:
-        """
-        Return data as 1D numpy array.
-        
-        Returns
-        -------
-        ndarray
-            1D numpy array with the data
-        """
+        """Return the internal data array (no copy — same object)."""
         if self.data is None:
             raise ValueError("No data has been loaded.")
-            
-        return self.data.copy()
-    
+        return self.data
+
     def get_basic_stats(self) -> Dict[str, Any]:
-        """
-        Return basic descriptive statistics of the data.
-        
-        Returns
-        -------
-        dict
-            Dictionary with basic statistics
-        """
+        """Return basic descriptive statistics."""
         if self.data is None:
             raise ValueError("No data has been loaded.")
-        
         return {
             'count': len(self.data),
-            'mean': np.mean(self.data),
-            'std': np.std(self.data, ddof=1),  # Sample standard deviation
-            'var': np.var(self.data, ddof=1),  # Sample variance
-            'min': np.min(self.data),
-            'max': np.max(self.data),
-            'median': np.median(self.data),
-            'q25': np.percentile(self.data, 25),
-            'q75': np.percentile(self.data, 75)
+            'mean': float(np.mean(self.data)),
+            'std': float(np.std(self.data, ddof=1)),
+            'var': float(np.var(self.data, ddof=1)),
+            'min': float(np.min(self.data)),
+            'max': float(np.max(self.data)),
+            'median': float(np.median(self.data)),
+            'q25': float(np.percentile(self.data, 25)),
+            'q75': float(np.percentile(self.data, 75)),
         }
-    
+
+    # ------------------------------------------------------------------
+    # Internal adjuster factory (kept for MagicAdjuster / MC internal use)
+    # ------------------------------------------------------------------
+
     def _get_adjuster(self):
-        """Get or create the internal adjuster."""
-        if self._adjuster is None:
-            from .magic_adjuster import MagicAdjuster
-            self._adjuster = MagicAdjuster(self)
-        return self._adjuster
-    
-    def fit_distribution(self, distribution: Union[str, object], **kwargs) -> 'DataProcessor':
+        """Create a :class:`~magica.core.magic_adjuster.MagicAdjuster` for this data."""
+        from .magic_adjuster import MagicAdjuster
+        return MagicAdjuster(self)
+
+    # ------------------------------------------------------------------
+    # Distribution fitting — primary API
+    # ------------------------------------------------------------------
+
+    def fit(self, distribution: Union[str, object], **kwargs):
         """
-        Fit a statistical distribution to the data.
-        
+        Fit a distribution and return an immutable :class:`~magica.core.magic_adjuster.FitResult`.
+
+        Each call is independent; multiple fits on the same processor coexist
+        without state collision.
+
         Parameters
         ----------
-        distribution : str or scipy.stats distribution
-            Distribution to fit. Can be:
-            - String: 'weibull', 'gamma', 'lognorm', 'norm', etc.
-            - SciPy distribution object: stats.weibull_min, stats.gamma, etc.
-        **kwargs : dict
-            Additional arguments passed to the distribution's fit method
-            
+        distribution : str or scipy continuous distribution
+            e.g. ``'weibull'``, ``'gamma'``, ``scipy.stats.genextreme``, …
+        **kwargs
+            Passed to ``distribution.fit()`` (e.g. ``floc=0``).
+
         Returns
         -------
-        DataProcessor
-            Processor instance with fitted distribution
+        FitResult
+
+        Examples
+        --------
+        >>> import magica as ma, numpy as np
+        >>> data = ma.read_data(np.random.weibull(2, 500) * 8)
+        >>> fit_w = data.fit('weibull', floc=0)
+        >>> fit_g = data.fit('gamma')
+        >>> # Independent results:
+        >>> fit_w.name, fit_g.name
+        ('weibull', 'gamma')
+        >>> fit_w.ppf(0.99)
+        >>> fit_w.goodness_of_fit('ks')
         """
-        adjuster = self._get_adjuster()
-        adjuster.fit_distribution(distribution, **kwargs)
-        return self
-    
-    def get_fitted_params(self) -> Tuple:
+        return self._get_adjuster().fit_distribution(distribution, **kwargs)
+
+    def fit_distribution(self, distribution: Union[str, object], **kwargs):
         """
-        Get the fitted distribution parameters.
-        
-        Returns
-        -------
-        tuple
-            Fitted parameters of the distribution
+        Alias for :meth:`fit` — returns a :class:`~magica.core.magic_adjuster.FitResult`.
+
+        .. deprecated::
+            The old behaviour (returning ``self`` and storing state) is removed.
+            This method now behaves identically to :meth:`fit`.
         """
-        if self._adjuster is None:
-            raise ValueError("No distribution has been fitted yet.")
-        
-        return self._adjuster.get_fitted_params()
-    
-    def get_distribution_info(self) -> Dict[str, Any]:
-        """
-        Get information about the fitted distribution.
-        
-        Returns
-        -------
-        dict
-            Dictionary with distribution information
-        """
-        if self._adjuster is None:
-            raise ValueError("No distribution has been fitted yet.")
-        
-        return self._adjuster.get_distribution_info()
-    
+        return self.fit(distribution, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Factory methods for higher-level tools
+    # ------------------------------------------------------------------
+
     def get_auto_fitter(self, candidates=None, criterion='rmse'):
         """
-        Create an AutoFitter instance for automatic distribution selection.
-        
-        This method follows the factory pattern - it creates an AutoFitter
-        instance when needed, allowing automatic testing of multiple distributions
-        to find the best fit based on specified criteria.
-        
+        Create an :class:`~magica.core.auto_fitter.AutoFitter` for this data.
+
         Parameters
         ----------
         candidates : list of str, optional
-            List of distribution names to test. If None, uses default set including:
-            'weibull_min', 'lognorm', 'gamma', 'norm', 'expon', 'rayleigh', 'chi2', 'beta'
-        criterion : str, default 'rmse'
-            Selection criterion ('rmse', 'aic', 'bic', 'ks_pvalue', 'chi2_pvalue')
-            
+        criterion : str, default ``'rmse'``
+
         Returns
         -------
         AutoFitter
-            AutoFitter instance configured with this data
-            
+
         Examples
         --------
-        >>> import magica as ma
-        >>> import numpy as np
-        >>> 
-        >>> # Load data
-        >>> data = np.random.weibull(2, 1000)
-        >>> processor = ma.read_data(data)
-        >>> 
-        >>> # Get auto fitter and find best distribution
-        >>> auto_fitter = processor.get_auto_fitter()
-        >>> best_result = auto_fitter.fit_best_distribution()
-        >>> print(f"Best distribution: {best_result['distribution']}")
+        >>> auto = data.get_auto_fitter()
+        >>> best = auto.fit_best_distribution()
+        >>> print(best.name, best.goodness_of_fit('rmse'))
         """
-        # Import here to avoid circular imports
         from .auto_fitter import AutoFitter
-        
         if self.data is None:
             raise ValueError("No data has been loaded.")
-            
         return AutoFitter(self, candidates=candidates, criterion=criterion)
-    
+
     def get_extremes_analyzer(
-        self, 
+        self,
         times: Optional[Union[np.ndarray, pd.Series, pd.DatetimeIndex]] = None,
-        time_unit: str = 'years'
+        time_unit: str = 'years',
     ):
         """
-        Create an ExtremesAnalyzer instance for extreme value analysis.
-        
-        This method provides access to return period and return value analysis
-        for extreme events in time series data.
-        
+        Create an :class:`~magica.core.extremes_analyzer.ExtremesAnalyzer`.
+
         Parameters
         ----------
         times : array-like, optional
-            Time values corresponding to data points. Can be:
-            - pandas DatetimeIndex
-            - pandas Series with datetime values
-            - numpy array of datetime64
-            - numpy array of numeric values (e.g., years)
-            - None if data is pandas Series with datetime index
-        time_unit : str, default='years'
-            Unit for return period calculations.
-            Options: 'years', 'days', 'hours', 'months'
-            
+            Datetime or numeric times corresponding to the data.
+        time_unit : str, default ``'years'``
+
         Returns
         -------
         ExtremesAnalyzer
-            ExtremesAnalyzer instance configured with this data
-            
+
         Examples
         --------
-        >>> import numpy as np
         >>> import pandas as pd
-        >>> import magica as ma
-        >>> 
-        >>> # Using pandas Series with datetime index
         >>> dates = pd.date_range('2000-01-01', periods=1000, freq='D')
-        >>> values = np.random.weibull(2, 1000) * 10
         >>> series = pd.Series(values, index=dates)
-        >>> 
         >>> processor = ma.read_data(series)
         >>> extremes = processor.get_extremes_analyzer()
-        >>> extremes.fit_distribution('genextreme')
-        >>> 
-        >>> # Calculate 100-year return value
-        >>> rv_100 = extremes.return_value(100)
-        >>> 
-        >>> # Or provide times separately
-        >>> processor2 = ma.read_data(values)
-        >>> extremes2 = processor2.get_extremes_analyzer(times=dates)
         """
-        # Import here to avoid circular imports
         from .extremes_analyzer import ExtremesAnalyzer
-        
         if self.data is None:
             raise ValueError("No data has been loaded.")
-            
         return ExtremesAnalyzer(self, times=times, time_unit=time_unit)
-    
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _update_metadata(self):
-        """Update data metadata."""
         if self.data is not None:
             self.metadata['length'] = len(self.data)
             self.metadata['dtype'] = str(self.data.dtype)
             self.metadata['last_updated'] = pd.Timestamp.now()
-    
+
     def __repr__(self) -> str:
-        """String representation of the object."""
         if self.data is None:
             return "DataProcessor(no data loaded)"
-        
-        # Check if distribution is fitted via adjuster
-        dist_info = ""
-        if self._adjuster is not None and self._adjuster.distribution_name is not None:
-            dist_info = f", distribution='{self._adjuster.distribution_name}'"
-            
-        return f"DataProcessor(length={len(self.data)}, dtype={self.data.dtype}{dist_info})"
-    
+        return f"DataProcessor(length={len(self.data)}, dtype={self.data.dtype})"
+
     def __len__(self) -> int:
-        """Return the length of the data."""
-        if self.data is None:
-            return 0
-        return len(self.data)
-    
-    def __getattr__(self, name):
-        """
-        Delegate method calls to the internal MagicAdjuster.
-        
-        This allows direct access to all scipy.stats methods like:
-        cdf, pdf, ppf, sf, isf, rvs, stats, etc.
-        
-        Parameters
-        ----------
-        name : str
-            Name of the method/attribute to access
-            
-        Returns
-        -------
-        Any
-            Method or attribute from the fitted distribution
-        """
-        # First check if we have an adjuster with a fitted distribution
-        if self._adjuster is None:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'. "
-                               "Did you forget to call fit_distribution() first?")
-        
-        # Delegate to the adjuster's __getattr__
-        try:
-            return getattr(self._adjuster, name)
-        except AttributeError:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+        return 0 if self.data is None else len(self.data)
