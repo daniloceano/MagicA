@@ -6,6 +6,15 @@ All notable changes to MagicA are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Time-based POT declustering now selects the largest observation in each window
+  by default. Set `peak_selection='first'` for the previous chronological behavior,
+  or `'last'` for the last observation. Also available in threshold search.
+  Windows start at the first ungrouped exceedance and exclude the right endpoint;
+  selected peaks in adjacent windows may be closer than the window duration.
+  Extracted values and downstream fits/return levels can change with the new default.
+
 ### Fixed
 
 - POT extraction with time-based declustering now returns empty values and

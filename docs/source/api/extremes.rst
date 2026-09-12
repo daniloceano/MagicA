@@ -183,16 +183,31 @@ Peaks Over Threshold (POT)
 
 Extract exceedances above a threshold for GPD analysis:
 
+Time-based declustering forms windows starting at the first ungrouped exceedance,
+including the start and excluding the end. For example, a three-day window
+starting on January 7 at midnight includes January 7–9; January 10 can start the
+next window. ``peak_selection='max'`` (default) chooses the largest value in each
+window, with the first observation winning ties. ``'first'`` and ``'last'`` choose
+the first or last observation chronologically. The returned timestamps always
+belong to the selected observations. Selected peaks in adjacent windows can be
+closer than the window duration.
+
+``peak_selection`` also applies to ``find_optimal_pot_threshold``. Changing the
+selection can change extracted values, fitted distributions, and return levels.
+Choose ``'first'`` to reproduce the previous behavior on chronological input.
+Pure POT and event-wise declustering are unaffected by this option.
+
 .. code-block:: python
 
     # Extract all peaks over threshold
     peaks, times = extremes.peaks_over_threshold(threshold=20.0)
     print(f"Found {len(peaks)} exceedances")
     
-    # Extract peaks with minimum separation (decluster)
+    # Extract the largest observation in each one-day window
     peaks, times = extremes.peaks_over_threshold(
         threshold=20.0,
-        min_separation='1D'  # At least 1 day apart
+        min_separation='1D',
+        peak_selection='max'  # Default; also 'first' or 'last'
     )
     print(f"Found {len(peaks)} independent peaks")
     
