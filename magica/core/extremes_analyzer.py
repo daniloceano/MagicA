@@ -657,7 +657,7 @@ class ExtremesAnalyzer:
         exceedances = self.data[exceed_mask]
         exceed_times = self.times[exceed_mask]
 
-        if min_separation is None:
+        if min_separation is None or len(exceedances) == 0:
             return exceedances, exceed_times
 
         if isinstance(min_separation, str):

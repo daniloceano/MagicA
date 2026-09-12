@@ -4,6 +4,14 @@ All notable changes to MagicA are documented here.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- POT extraction with time-based declustering now returns empty values and
+  timestamps instead of raising `IndexError` when no observations exceed the
+  threshold.
+
 ## [0.2.0] — 2026-06-11
 
 ### Breaking changes
