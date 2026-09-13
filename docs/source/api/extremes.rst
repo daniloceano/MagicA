@@ -197,6 +197,38 @@ selection can change extracted values, fitted distributions, and return levels.
 Choose ``'first'`` to reproduce the previous behavior on chronological input.
 Pure POT and event-wise declustering are unaffected by this option.
 
+Only observations strictly greater than ``threshold`` are selected; values equal
+to it are excluded. With datetime input, an empty selection returns an empty
+NumPy array and an empty ``DatetimeIndex``, including with time-based declustering.
+The function does not invent a date or raise an error for an empty selection.
+With no datetime information, the existing return convention is ``(values, None)``.
+
+.. code-block:: python
+
+    import pandas as pd
+    import magica as ma
+
+    # Five-day pulse, with zero wind outside the event
+    series = pd.Series(0.0, index=pd.date_range('2024-01-01', '2024-01-31'))
+    series.loc['2024-01-14':'2024-01-18'] = [11., 12., 13., 12., 11.]
+    demo = ma.read_data(series).get_extremes_analyzer()
+
+    values, times = demo.peaks_over_threshold(10, min_separation='3D')
+    print(values.tolist())
+    print(times.strftime('%Y-%m-%d').tolist())
+    # [13.0, 12.0]
+    # ['2024-01-16', '2024-01-17']
+
+    # The same windows, with a different representative
+    values, times = demo.peaks_over_threshold(
+        10, min_separation='3D', peak_selection='last'
+    )
+    # values: [13.0, 11.0]; dates: 2024-01-16 and 2024-01-18
+
+    empty_values, empty_times = demo.peaks_over_threshold(13, min_separation='3D')
+    assert empty_values.size == len(empty_times) == 0
+
+
 .. code-block:: python
 
     # Extract all peaks over threshold
@@ -209,7 +241,7 @@ Pure POT and event-wise declustering are unaffected by this option.
         min_separation='1D',
         peak_selection='max'  # Default; also 'first' or 'last'
     )
-    print(f"Found {len(peaks)} independent peaks")
+    print(f"Found {len(peaks)} selected peaks")
     
     # Fit GPD to excesses (peaks - threshold)
     excesses = peaks - 20.0
@@ -339,10 +371,11 @@ POT Analysis with GPD
     # Extract peaks over threshold with declustering
     peaks, peak_times = extremes.peaks_over_threshold(
         threshold=threshold,
-        min_separation='12H'  # At least 12 hours between peaks
+        min_separation='12h',  # Window duration
+        peak_selection='max'  # Default; also 'first' or 'last'
     )
     
-    print(f"Found {len(peaks)} independent peaks")
+    print(f"Found {len(peaks)} selected peaks")
     
     # Calculate excesses
     excesses = peaks - threshold
@@ -471,9 +504,9 @@ Intelligent POT Threshold Selection
 MagicA provides an automated method for finding optimal POT thresholds that balance the need for:
 - High enough threshold to capture only extreme values
 - Sufficient sample size for reliable fitting (typically ≥50 independent samples)
-- Statistical independence through appropriate declustering
+- Reduced clustering through time windows; independence must be assessed separately
 
-The ``find_optimal_pot_threshold()`` method systematically searches for optimal parameters.
+The ``find_optimal_pot_threshold()`` method systematically searches threshold percentiles and window durations. Each window uses ``peak_selection='max'`` by default; ``'first'`` and ``'last'`` are also supported.
 
 Basic Usage
 ~~~~~~~~~~~
@@ -493,11 +526,11 @@ Basic Usage
     
     # Find optimal threshold automatically
     result = extremes.find_optimal_pot_threshold(
-        min_samples=50,           # Target minimum independent samples
+        min_samples=50,           # Target number of selected peaks
         percentile_min=90,        # Start searching at 90th percentile
         percentile_max=99,        # Stop at 99th percentile
-        min_separation_hours=48,  # Minimum time between independent events
-        max_separation_hours=120, # Maximum separation to try
+        min_separation_hours=48,  # Smallest window duration to try
+        max_separation_hours=120, # Largest window duration to try
         verbose=True              # Show search progress
     )
     
@@ -506,7 +539,7 @@ Basic Usage
         print(f"Optimal threshold: {result['threshold']:.2f}")
         print(f"Percentile: {result['percentile']:.1f}%")
         print(f"Separation: {result['separation_hours']} hours")
-        print(f"Independent exceedances: {result['n_independent']}")
+        print(f"Selected peaks: {result['n_independent']}")
         
         # Access the exceedances for further analysis
         exceedances = result['exceedances']
@@ -584,7 +617,7 @@ For phenomena with shorter temporal dependence:
         min_samples=80,          # More samples needed
         percentile_min=85,       # Lower percentiles
         percentile_max=95,
-        min_separation_hours=6,  # 6-hour minimum separation
+        min_separation_hours=6,  # Smallest window: 6 hours
         max_separation_hours=24,
         separation_step_hours=6
     )
@@ -599,7 +632,7 @@ For meteorological events with multi-day persistence:
         min_samples=50,
         percentile_min=90,
         percentile_max=99,
-        min_separation_hours=72,   # 3-day minimum
+        min_separation_hours=72,   # Smallest window: 3 days
         max_separation_hours=168,  # Up to 7 days
         separation_step_hours=24
     )
@@ -609,6 +642,12 @@ Return Value Structure
 
 The method returns a dictionary with comprehensive information:
 
+``separation_hours`` records the window duration, not a guaranteed gap between
+selected observations. ``n_independent`` is the existing API key for the selected
+peak count; it does not certify statistical independence. The default
+``peak_selection='max'`` also applies during threshold search; use ``'first'``
+to reproduce the previous selection on chronological input.
+
 .. code-block:: python
 
     result = extremes.find_optimal_pot_threshold(min_samples=50)
@@ -617,11 +656,11 @@ The method returns a dictionary with comprehensive information:
     result['success']              # bool: True if min_samples achieved
     result['threshold']            # float: Optimal threshold value
     result['percentile']           # float: Percentile of threshold
-    result['separation_hours']     # float: Time separation used
+    result['separation_hours']     # float: Window duration in hours
     result['n_raw_exceedances']    # int: Exceedances before declustering
-    result['n_independent']        # int: Independent exceedances after declustering
-    result['exceedances']          # array: Independent exceedance values
-    result['exceedance_times']     # array: Times of independent exceedances
+    result['n_independent']        # int: Selected peaks after declustering
+    result['exceedances']          # array: Selected observation values
+    result['exceedance_times']     # array: Original timestamps of selected peaks
     result['iterations']           # int: Number of iterations performed
     
     # Optional (if min_samples not achieved):

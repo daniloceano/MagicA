@@ -156,7 +156,7 @@ Allowed BM distributions: `'genextreme'`, `'gumbel_r'`.
 
 ```python
 # 1. Find threshold
-result = extremes.find_optimal_pot_threshold(min_samples=50)
+result = extremes.find_optimal_pot_threshold(min_samples=50, peak_selection='max')
 
 # 2. Fit GPD to exceedances above threshold
 ev_fit = extremes.fit_pot(result, distribution='genpareto')
@@ -167,6 +167,21 @@ rv_100 = ev_fit.return_value(100)
 ```
 
 Allowed PoT distributions: `'genpareto'`, `'expon'`.
+
+`peaks_over_threshold(threshold, min_separation='3D', peak_selection='max')`
+selects the largest observation per time window. Use `'first'` for the previous
+chronological behavior or `'last'` for the last observation. A window starts at
+the first ungrouped exceedance, includes its start, and excludes its end.
+Maximum ties keep the first observation. Returned dates belong to those original
+observations; adjacent selected peaks may be less than three days apart.
+
+The threshold comparison is strict (`value > threshold`). With datetime input,
+no exceedances means an empty NumPy array and an empty `DatetimeIndex`, including
+when time-based declustering is requested. Pure POT and event-wise selection do
+not use `peak_selection`. The threshold search accepts the same option; its
+`n_independent` key counts selected peaks rather than proving independence.
+Changing the selected observations can change GPD fits and return levels.
+
 
 ### EVAFit attributes
 

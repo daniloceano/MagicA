@@ -300,6 +300,17 @@ Peaks Over Threshold Analysis
 
 Analyze extreme values using peaks over threshold (POT):
 
+POT selects observations strictly above the threshold. With ``min_separation``,
+MagicA selects the largest value in each time window by default. Set
+``peak_selection='first'`` or ``'last'`` to select the first or last observation.
+A window starts at the first ungrouped exceedance and excludes its right endpoint;
+selected peaks in adjacent windows can be closer than the window duration.
+Ties for the maximum keep the first observation. Without exceedances, extraction
+returns an empty array and an empty ``DatetimeIndex`` for datetime input.
+
+The same selection option is available in ``find_optimal_pot_threshold``.
+See :doc:`api/extremes` for window examples and return types.
+
 .. code-block:: python
 
     import pandas as pd
@@ -319,10 +330,11 @@ Analyze extreme values using peaks over threshold (POT):
     # Extract peaks with declustering
     peaks, peak_times = extremes.peaks_over_threshold(
         threshold=threshold,
-        min_separation='12H'  # Minimum 12 hours between peaks
+        min_separation='12h',  # Window duration
+        peak_selection='max'  # Default; also 'first' or 'last'
     )
     
-    print(f"Found {len(peaks)} independent peaks above {threshold:.2f} m")
+    print(f"Found {len(peaks)} selected peaks above {threshold:.2f} m")
     
     # Fit GPD to excesses
     excesses = peaks - threshold
@@ -596,10 +608,10 @@ Basic Threshold Search
     
     # Find optimal threshold automatically
     result = extremes.find_optimal_pot_threshold(
-        min_samples=50,           # Target minimum independent samples
+        min_samples=50,           # Target number of selected peaks
         percentile_min=90,        # Start at 90th percentile
         percentile_max=99,        # Stop at 99th percentile
-        min_separation_hours=48,  # Minimum time between events
+        min_separation_hours=48,  # Smallest window duration to try
         max_separation_hours=120,
         verbose=True              # Show search progress
     )
@@ -607,7 +619,7 @@ Basic Threshold Search
     # Use the results
     if result['success']:
         print(f"Optimal threshold: {result['threshold']:.2f} m/s")
-        print(f"Independent exceedances: {result['n_independent']}")
+        print(f"Selected peaks: {result['n_independent']}")
         
         # Access exceedances for further analysis
         exceedances = result['exceedances']
@@ -774,7 +786,7 @@ Extreme Value Analysis
 2. **Use GPD (genpareto) for POT** - peaks over threshold analysis
 3. **Require sufficient data**: Minimum 20-30 years for annual maxima
 4. **Check stationarity**: Extreme value theory assumes stationary data
-5. **Decluster POT data**: Use `min_separation` to ensure independence
+5. **Decluster POT data**: Use `min_separation` to group exceedances into windows; assess independence separately
 
 **Time Series Requirements:**
 
