@@ -1,5 +1,41 @@
 # MagicA Migration Guide: 0.1.x → 0.2.0
 
+## Unreleased: POT time-window selection
+
+Time-based POT now chooses the largest observation in each window by default.
+For the previous behavior on chronological input, request `peak_selection='first'`:
+
+```python
+# Largest observation per three-day window (new default)
+peaks, times = extremes.peaks_over_threshold(10, min_separation='3D')
+
+# First observation per window (previous behavior)
+peaks, times = extremes.peaks_over_threshold(
+    10, min_separation='3D', peak_selection='first'
+)
+
+# Last observation per window
+peaks, times = extremes.peaks_over_threshold(
+    10, min_separation='3D', peak_selection='last'
+)
+
+# The same choice is available in automatic threshold search
+result = extremes.find_optimal_pot_threshold(peak_selection='first')
+```
+
+Windows start at the first ungrouped exceedance and exclude the right endpoint.
+Their membership does not depend on the representative chosen. Consequently,
+selected peaks in adjacent windows can be closer than `min_separation`.
+Ties for the maximum keep the first observation. Returned timestamps are the
+original observation dates. Changing from `'first'` to `'max'` can change the
+extracted values, distribution fits, and return levels.
+
+For datetime input with no values strictly above the threshold, extraction now
+returns an empty NumPy array and an empty `DatetimeIndex`; time-based declustering
+no longer raises `IndexError`. Pure POT and event-wise behavior are unchanged.
+
+---
+
 ## Summary of breaking changes
 
 | Area | Before (0.1.x) | After (0.2.0) |

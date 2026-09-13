@@ -609,6 +609,8 @@ class ExtremesAnalyzer:
         threshold: float,
         min_separation: Optional[Union[str, pd.Timedelta, int, float]] = None,
         event_wise: bool = False,
+        *,
+        peak_selection: str = 'max',
     ) -> Tuple[np.ndarray, Optional[Union[pd.DatetimeIndex, np.ndarray]]]:
         """
         Extract peaks over threshold (PoT) from the time series.
@@ -617,15 +619,26 @@ class ExtremesAnalyzer:
         ----------
         threshold : float
         min_separation : str, Timedelta, int, or float, optional
-            Minimum time between peaks.  Numeric values are interpreted as days.
+            Time-based window duration. Numeric values are interpreted as days.
+            Each window starts at the first ungrouped exceedance and excludes
+            its right endpoint. Selected peaks in adjacent windows can be closer
+            than this duration. Zero keeps all exceedances.
         event_wise : bool, default False
             If True, return one peak per consecutive exceedance event.
+        peak_selection : {'max', 'first', 'last'}, default 'max'
+            Representative of each time-based window: largest value, first
+            observation, or last observation. Windows are formed chronologically
+            before selection; maximum ties keep the first observation.
+            'first' reproduces the previous behavior on chronological input.
+            Ignored without min_separation or when event_wise=True.
 
         Returns
         -------
         exceedances : ndarray
         times : DatetimeIndex or ndarray or None
         """
+        if peak_selection not in ('max', 'first', 'last'):
+            raise ValueError("peak_selection must be 'max', 'first', or 'last'.")
         exceed_mask = self.data > threshold
 
         if not self.has_datetime:
@@ -657,7 +670,7 @@ class ExtremesAnalyzer:
         exceedances = self.data[exceed_mask]
         exceed_times = self.times[exceed_mask]
 
-        if min_separation is None:
+        if min_separation is None or len(exceedances) == 0:
             return exceedances, exceed_times
 
         if isinstance(min_separation, str):
@@ -665,10 +678,27 @@ class ExtremesAnalyzer:
         elif isinstance(min_separation, (int, float)):
             min_separation = pd.Timedelta(days=min_separation)
 
-        keep = [0]
-        for i in range(1, len(exceed_times)):
-            if exceed_times[i] - exceed_times[keep[-1]] >= min_separation:
-                keep.append(i)
+        if pd.isna(min_separation) or min_separation < pd.Timedelta(0):
+            raise ValueError("min_separation must be a non-negative duration.")
+
+        order = np.argsort(exceed_times, kind='stable')
+        exceedances = exceedances[order]
+        exceed_times = exceed_times[order]
+        keep = []
+        start = 0
+        while start < len(exceed_times):
+            end = start + 1
+            while (end < len(exceed_times)
+                   and exceed_times[end] - exceed_times[start] < min_separation):
+                end += 1
+            if peak_selection == 'max':
+                selected = start + int(np.argmax(exceedances[start:end]))
+            elif peak_selection == 'first':
+                selected = start
+            else:
+                selected = end - 1
+            keep.append(selected)
+            start = end
 
         return exceedances[keep], exceed_times[keep]
 
@@ -710,6 +740,8 @@ class ExtremesAnalyzer:
         vary_first: str = 'percentile',
         max_iterations: int = 200,
         verbose: bool = False,
+        *,
+        peak_selection: str = 'max',
     ) -> Dict[str, Any]:
         """
         Search for a PoT threshold yielding at least *min_samples* independent peaks.
@@ -727,6 +759,8 @@ class ExtremesAnalyzer:
             ``'percentile'`` or ``'separation'``.
         max_iterations : int, default 200
         verbose : bool, default False
+        peak_selection : {'max', 'first', 'last'}, default 'max'
+            Time-based window representative; see :meth:`peaks_over_threshold`.
 
         Returns
         -------
@@ -739,6 +773,8 @@ class ExtremesAnalyzer:
             raise ValueError(
                 "POT threshold search requires datetime information."
             )
+        if peak_selection not in ('max', 'first', 'last'):
+            raise ValueError("peak_selection must be 'max', 'first', or 'last'.")
         if vary_first not in ('percentile', 'separation'):
             raise ValueError("vary_first must be 'percentile' or 'separation'.")
         if percentile_min >= percentile_max:
@@ -767,7 +803,8 @@ class ExtremesAnalyzer:
                         continue
                     try:
                         exc, exc_t = self.peaks_over_threshold(
-                            threshold=u, min_separation=sep_h / 24)
+                            threshold=u, min_separation=sep_h / 24,
+                            peak_selection=peak_selection)
                         n_ind = len(exc)
                         result = {
                             'threshold': u,
@@ -811,7 +848,8 @@ class ExtremesAnalyzer:
                         break
                     try:
                         exc, exc_t = self.peaks_over_threshold(
-                            threshold=u, min_separation=current_sep / 24)
+                            threshold=u, min_separation=current_sep / 24,
+                            peak_selection=peak_selection)
                         n_ind = len(exc)
                         result = {
                             'threshold': u,

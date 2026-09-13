@@ -6,6 +6,8 @@ with temporal structure, storm events, and optionally directional characteristic
 Useful for testing extreme value analysis methods and creating reproducible examples.
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, Dict, Any, Union
