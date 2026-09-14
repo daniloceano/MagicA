@@ -29,8 +29,11 @@ then continue to the directional wind example.
    distribution_fitting
    extreme_value_analysis
 
-API Usage Tutorial
-------------------
+.. _api-usage-tutorial:
+.. _usage-guides:
+
+Quick Start
+-----------
 
 .. _magica-api-usage:
 .. _basic-example-weibull-fit-and-goodness-of-fit-evaluation:
@@ -46,11 +49,13 @@ API Usage Tutorial
 .. _working-with-xarray-results:
 .. _goodness-of-fit-methods:
 
-For common operations and code patterns, see :doc:`api_usage`.
-The guide is available on its own page rather than reproduced in this index.
+For basic fitting, goodness-of-fit evaluation, Monte Carlo calls, and working
+with results, see :doc:`/quickstart`.
 
-Monte Carlo Stability Tutorial
-------------------------------
+.. _monte-carlo-stability-tutorial:
+
+Methodology
+-----------
 
 .. _why-monte-carlo-stability:
 .. _methodology-what-we-do:
@@ -74,12 +79,6 @@ For the motivation, sampling strategies, and stability-detection options,
 see :doc:`monte_carlo`. The guide distinguishes the scientific context from
 MagicA's implementation options.
 
-.. toctree::
-   :hidden:
-
-   api_usage
-   monte_carlo
-
 Legacy Examples
 ---------------
 
@@ -99,7 +98,6 @@ Download the notebooks to run the tutorials locally:
 - :download:`AutoFitter tutorial <auto_fitter_tutorial.ipynb>`
 - :download:`Extreme Value Analysis tutorial <extremes_tutorial.ipynb>`
 - :download:`Directional Extremes tutorial <directional_extremes_tutorial.ipynb>`
-- :download:`API Usage guide (Markdown) <api_usage.md>`
 
 .. _best-practices-summary:
 

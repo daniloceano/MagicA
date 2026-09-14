@@ -15,10 +15,14 @@ Install this repository using pip:
 Basic Usage
 -----------
 
+.. _qs-fitting:
+
 Distribution Fitting
 ~~~~~~~~~~~~~~~~~~~~
 
-Start by fitting a distribution to your data:
+Load an array-like sample (a list, NumPy array, or pandas Series/DataFrame),
+then fit a distribution. ``fit()`` returns an immutable ``FitResult``;
+``fit_distribution()`` is an alias with the same return type.
 
 .. code-block:: python
 
@@ -35,11 +39,17 @@ Start by fitting a distribution to your data:
     # Get fitted parameters
     params = fit.params
     print(f"Fitted parameters: {params}")
+    print(fit.info)  # Distribution name, parameters, and sample size
+    print(processor.get_basic_stats())  # Descriptive statistics
+
+.. _qs-gof:
 
 Goodness-of-Fit Testing
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Evaluate how well your distribution fits the data:
+Evaluate how well your distribution fits the data. KS and chi-square return
+dictionaries; RMSE, AIC, and BIC return scalar values. MagicA computes RMSE
+between the empirical and fitted CDFs. See :doc:`api/core` for the full API.
 
 .. code-block:: python
 
@@ -140,6 +150,8 @@ Analyze extreme values and calculate return periods for time series data:
    - ``'gumbel_r'``: Gumbel distribution - common for environmental extremes
    - ``'weibull_max'``: Weibull maximum - for maximum extremes
 
+.. _qs-mc:
+
 Monte Carlo Stability Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -174,6 +186,8 @@ Determine the minimum sample size needed for stable parameter estimation:
 .. important::
    **Always include 'rmse' in your tests** - RMSE provides the most reliable stability detection with smooth, monotonic convergence, unlike p-values which can be erratic.
 
+.. _qs-xarray:
+
 Working with xarray Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -181,21 +195,29 @@ The Monte Carlo analysis returns an xarray Dataset for easy data manipulation:
 
 .. code-block:: python
 
-    # Select data for specific sample size
+    # Inspect dimensions and available variables
+    print(results.sizes)
+    print(list(results.data_vars))
+
+    # Select the first size, the size nearest 200, or a range
     first_size_results = results.isel(sizes=0)
+    size_200 = results.sel(sizes=200, method='nearest')
+    larger_sizes = results.sel(sizes=slice(200, None))
     
     # Calculate statistics across repeats
+    param_mean = results['param_0'].mean(dim='repeats')
     param_std = results['param_0'].std(dim='repeats')
     rmse_median = results['rmse'].median(dim='repeats')
     
     # Plot results directly
     import matplotlib.pyplot as plt
-    results['rmse'].plot(x='sizes')
+    results['rmse'].plot(x='sizes', hue='repeats', alpha=0.3)
     plt.title('RMSE Convergence')
     plt.show()
     
     # Convert to pandas for further analysis
     df = results.to_dataframe()
+    figure_path = results.attrs['figure_path']  # None when no figure was saved
 
 Advanced Examples
 -----------------
@@ -344,16 +366,8 @@ See :doc:`api/extremes` for window examples and return types.
     processor_pot = ma.read_data(excesses)
     processor_pot.fit_distribution('genpareto')
 
-.. code-block:: python
 
-    # Use known Weibull parameters (shape=2, loc=0, scale=1)
-    known_params = (2.0, 0.0, 1.0)
-    
-    results = adjuster.monte_carlo_fit(
-        distribution_params=known_params,
-        n_repeats=150,
-        tests=['chi2', 'ks', 'rmse']
-    )
+.. _qs-constraints:
 
 Custom Fitting Constraints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

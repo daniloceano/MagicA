@@ -28,7 +28,7 @@ Related Guides
 --------------
 
 - :doc:`monte_carlo` explains subsampling and stability detection.
-- :doc:`api_usage` provides common usage patterns.
+- :doc:`/quickstart` provides common usage patterns.
 - :doc:`/api/core` documents DataProcessor, MagicAdjuster, and FitResult.
 - :doc:`/api/auto_fitter` documents automatic distribution selection.
 - :doc:`extreme_value_analysis` introduces the separate workflow for extremes.

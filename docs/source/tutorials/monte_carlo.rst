@@ -1,5 +1,9 @@
-Monte Carlo Stability Tutorial
-==============================
+.. raw:: html
+
+   <span id="monte-carlo-stability-tutorial"></span>
+
+Monte Carlo Stability
+=====================
 
 This tutorial explains why Monte Carlo stability analysis is useful and how
 the `monte_carlo_fit` routine in MagicA is designed and used.

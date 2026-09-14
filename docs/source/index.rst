@@ -64,6 +64,12 @@ Contents
 
 .. toctree::
    :maxdepth: 2
+   :caption: Methodology
+
+   Monte Carlo Stability <tutorials/monte_carlo>
+
+.. toctree::
+   :maxdepth: 2
    :caption: API Reference
 
    api/core
