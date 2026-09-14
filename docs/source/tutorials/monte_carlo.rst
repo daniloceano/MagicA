@@ -11,10 +11,9 @@ Large-sample-size effects occur when very large datasets make statistical tests
 extremely powerful: p-values become very small even for effects that are
 practically negligible. In other words, with enough data a test can reject the
 null hypothesis for differences that have no practical importance. The Monte
-Carlo stability workflow therefore looks for a sampling size where the chosen
-goodness-of-fit tests start to "pass" in a practical sense and parameter
-estimates stop changing much across repeats — that sample size is reported as
-the stability point.
+Carlo stability workflow tracks changes in parameters and goodness-of-fit metrics across
+sample sizes. The stability detector does not test whether a p-value exceeds
+a significance threshold; stability and goodness-of-fit acceptance are distinct.
 
 
 Methodology (what we do)
@@ -25,9 +24,9 @@ Methodology (what we do)
 3. For each subsample, fit the distribution (unless fixed parameters are supplied).
 4. Compute goodness-of-fit metrics (e.g., KS p-value, chi-square p-value, RMSE).
 5. Store all results in an xarray Dataset with dimensions `sizes` x `repeats`.
-6. Detect stability points using a moving-window criterion on variability (e.g., CV).
-7. Optionally save a 2x3 summary figure with red dashed vertical lines marking each
-   variable's detected stability sample size.
+6. Detect stability using the selected algorithm (Kneedle by default; CV or plateau are also available).
+7. Optionally save a 2x3 summary figure. Red dashed lines mark the recommended
+   size across panels; additional metric-specific markers may also appear.
 
 Inputs and options
 ------------------
@@ -52,7 +51,7 @@ metric behavior.
 CV Method (Coefficient of Variation)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Principle**: Monitors the coefficient of variation (CV = std/mean) across
+**Principle**: Monitors the coefficient of variation (CV = std/abs(mean)) across
 repeats. Stability is detected when CV remains below a threshold for a
 consecutive window of sample sizes.
 
@@ -60,7 +59,7 @@ consecutive window of sample sizes.
 
 .. math::
 
-    CV_n = \frac{\sigma_n}{\mu_n}
+    CV_n = \frac{\sigma_n}{|\mu_n|}
 
 Where :math:`\sigma_n` is the standard deviation and :math:`\mu_n` is the mean
 across repeats at sample size n.
@@ -73,7 +72,7 @@ across repeats at sample size n.
 
 **Parameters** (via kwargs):
 
-- `window_size`: Number of consecutive sizes for validation (default: 25% of n_sizes)
+- `window_size`: Number of consecutive sizes for validation (default: max(2, n_sizes // 4))
 - `cv_threshold`: Maximum allowed CV (default: 0.1)
 
 Kneedle Method (Elbow Detection)
@@ -183,6 +182,7 @@ Below is a concise, practical explanation of the three supported strategies and
 how to choose between them.
 
 - random (without replacement)
+
   - What: Each subsample contains `size` unique indices drawn randomly from the
     original dataset (no duplicates inside the same subsample).
   - Constraint: `size` must be less than or equal to the original sample size
@@ -192,6 +192,7 @@ how to choose between them.
     duplication.
 
 - bootstrap (with replacement)
+
   - What: Each subsample is drawn with replacement, so the same original row
     can appear multiple times in a single subsample.
   - Constraint: None — `size` may be larger than `N` because indices can repeat.
@@ -199,6 +200,7 @@ how to choose between them.
     resampling, or when you want to allow `size` >= `N` for simulation purposes.
 
 - disjoint (non-overlapping partitions)
+
   - What: The original indices are shuffled and partitioned into non-overlapping
     blocks of length `size`. Each block is a subsample with no shared indices.
   - Constraint: `size` must be <= `N`. The number of blocks per shuffle is
@@ -323,3 +325,30 @@ Further reading
 
 See :doc:`/api/core` for function signature and options, and the example
 notebook in this folder for a hands-on run.
+
+Scientific context
+------------------
+
+De Souza, D. C., Nunes, L. M. P., de Camargo, R., Pimenta, F. M.,
+Andrioni, M., and Ribeiro, E. O. (2026). *Addressing the large-sample-size
+effect in wind-speed goodness-of-fit through temporal segmentation and
+Monte-Carlo simulation*. Energy Conversion and Management: X, 31, 102163.
+`doi:10.1016/j.ecmx.2026.102163 <https://doi.org/10.1016/j.ecmx.2026.102163>`_.
+
+The article's abstract describes repeated subsampling, distribution fitting,
+KS/chi-square evaluation, RMSE stabilization, and temporal segmentation.
+MagicA provides subsampling and stability-analysis options, but its ``disjoint``
+strategy shuffles indices; it does not implement temporal segmentation.
+Segment time-indexed data explicitly before constructing an adjuster when that
+is part of the analysis. The software options ``cv``, ``kneedle``, ``plateau``
+and ``aggregate`` are described here as implementation features, not as an
+assertion that all are prescribed by the article.
+
+In the current implementation RMSE is computed between the empirical CDF
+(``i / n`` at sorted observations) and the fitted CDF. Stability does not require
+a goodness-of-fit test to pass. ``recommended_size`` prioritizes detected RMSE,
+KS p-value, chi-square p-value, then the first parameter; if none is detected,
+it falls back to the largest tested size with ``primary_metric='max_size'``.
+This fallback must not be interpreted as detected stability.
+
+Bibliographic metadata and abstract: `DOAJ metadata and abstract (JSON) <https://doaj.org/api/articles/5ab9d12e4648474bb91e934288d083c9>`_.

@@ -46,14 +46,16 @@ Basic Usage
     # Find best distribution
     best_result = auto_fitter.fit_best_distribution()
     
-    print(f"Best distribution: {best_result['distribution']}")
-    print(f"RMSE: {best_result['rmse']:.6f}")
-    print(f"Parameters: {best_result['parameters']}")
+    print(f"Best distribution: {best_result.name}")
+    print(f"RMSE: {best_result.goodness_of_fit('rmse'):.6f}")
+    print(f"Parameters: {best_result.params}")
 
 Testing All Distributions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
+
+    from magica.core import AutoFitter
 
     # Get all available distributions
     all_dists = AutoFitter.get_all_available_distributions()
@@ -66,7 +68,7 @@ Testing All Distributions
     )
     
     best = auto_fitter.fit_best_distribution()
-    print(f"Best from all 113+: {best['distribution']}")
+    print(f"Best from all 113+: {best.name}")
 
 Custom Distribution List
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -120,23 +122,26 @@ Get a comprehensive comparison of all tested distributions:
 Using the Best Distribution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Once you've found the best distribution, you can use it like a regular MagicAdjuster:
+Once you've found the best distribution, you can use it through the returned ``FitResult``:
 
 .. code-block:: python
 
     # Get the adjuster for best distribution
-    best_adjuster = auto_fitter.get_best_adjuster()
+    best_fit = auto_fitter.fit_best_distribution()
     
     # Calculate statistics
-    mean = best_adjuster.stats(moments='m')
-    p95 = best_adjuster.ppf(0.95)  # 95th percentile
+    mean = best_fit.stats(moments='m')
+    p95 = best_fit.ppf(0.95)  # 95th percentile
     
     # Perform goodness-of-fit tests
-    ks_result = best_adjuster.goodness_of_fit('ks')
-    rmse_result = best_adjuster.goodness_of_fit('rmse')
+    ks_result = best_fit.goodness_of_fit('ks')
+    rmse_result = best_fit.goodness_of_fit('rmse')
     
-    # Monte Carlo stability analysis
-    mc_results = best_adjuster.monte_carlo_fit(
+    # Monte Carlo requires a fitted MagicAdjuster
+    from magica.core import MagicAdjuster
+    adjuster = MagicAdjuster(processor)
+    adjuster.fit_distribution(best_fit.name)
+    mc_results = adjuster.monte_carlo_fit(
         tests=['ks', 'chi2', 'rmse'],
         n_repeats=100,
         fig_output_path='stability.png'
@@ -187,22 +192,22 @@ When to Use Each
 Result Dictionary
 -----------------
 
-Each distribution's results contain:
+``get_comparison_table()`` and ``fit_all_distributions()`` return scalar
+metric dictionaries per candidate (not ``FitResult`` objects). Successful entries contain:
 
 .. code-block:: python
 
     {
         'distribution': str,      # Distribution name
         'success': bool,          # Whether fitting succeeded
-        'parameters': tuple,      # Fitted parameters
+        'params': tuple,      # Fitted parameters
         'rmse': float,           # Root mean square error
         'aic': float,            # Akaike Information Criterion
         'bic': float,            # Bayesian Information Criterion
         'ks_statistic': float,   # KS test statistic
         'ks_pvalue': float,      # KS test p-value
         'chi2_statistic': float, # Chi-square statistic
-        'chi2_pvalue': float,    # Chi-square p-value
-        'adjuster': MagicAdjuster  # Fitted adjuster instance
+        'chi2_pvalue': float     # Chi-square p-value
     }
 
 Default Distributions
@@ -213,22 +218,9 @@ The default candidate list includes 16 stable, commonly-used distributions:
 .. code-block:: python
 
     default_distributions = [
-        'norm',           # Normal
-        'lognorm',        # Log-normal
-        'expon',          # Exponential
-        'weibull_min',    # Weibull (minimum)
-        'gamma',          # Gamma
-        'beta',           # Beta
-        'chi2',           # Chi-square
-        'rayleigh',       # Rayleigh
-        'uniform',        # Uniform
-        'logistic',       # Logistic
-        'gumbel_r',       # Gumbel (right)
-        'exponweib',      # Exponentiated Weibull
-        'genextreme',     # Generalized Extreme Value
-        'pareto',         # Pareto
-        'maxwell',        # Maxwell
-        'rice'            # Rice
+        'weibull_min', 'lognorm', 'gamma', 'norm', 'expon', 'rayleigh',
+        'chi2', 'beta', 'uniform', 'logistic', 'gumbel_r', 'pareto',
+        'invgamma', 'maxwell', 'triang', 'laplace',
     ]
 
 To test all 113+ available distributions, use:
@@ -256,10 +248,10 @@ Finding Best Distribution
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     best = auto_fitter.fit_best_distribution()
     
-    print(f"Best distribution: {best['distribution']}")
-    print(f"RMSE: {best['rmse']:.6f}")
-    print(f"AIC: {best['aic']:.2f}")
-    print(f"KS p-value: {best['ks_pvalue']:.6f}")
+    print(f"Best distribution: {best.name}")
+    print(f"RMSE: {best.goodness_of_fit('rmse'):.6f}")
+    print(f"AIC: {best.goodness_of_fit('aic'):.2f}")
+    print(f"KS p-value: {best.goodness_of_fit('ks')['p_value']:.6f}")
 
 Comparing Multiple Criteria
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -272,7 +264,7 @@ Comparing Multiple Criteria
     for criterion in criteria:
         fitter = processor.get_auto_fitter(criterion=criterion)
         best = fitter.fit_best_distribution()
-        print(f"{criterion.upper()}: {best['distribution']}")
+        print(f"{criterion.upper()}: {best.name}")
 
 Filtering by P-value (Synthetic Data Only)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -304,7 +296,7 @@ Best Practices
 3. **Create custom lists** for domain-specific applications (e.g., wind, rainfall)
 4. **Filter by p-value only for synthetic data** with moderate sample sizes
 5. **Check multiple criteria** to verify consistency in distribution selection
-6. **Use the best adjuster** for further analysis (Monte Carlo, goodness-of-fit)
+6. **Use FitResult** for distribution evaluation and a fitted MagicAdjuster for Monte Carlo
 
 See Also
 --------

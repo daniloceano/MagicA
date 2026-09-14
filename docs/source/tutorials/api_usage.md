@@ -14,12 +14,12 @@ processor = ma.read_data(wind_data)
 
 # 2. Fit Weibull distribution
 fitted = processor.fit_distribution('weibull')
-params = fitted.get_fitted_params()
+params = fitted.params
 
 # 3. Evaluate goodness-of-fit
 chi2 = fitted.goodness_of_fit('chi2')
 ks = fitted.goodness_of_fit('ks')
-rms = fitted.goodness_of_fit('rms')
+rms = fitted.goodness_of_fit('rmse')
 
 print('Weibull parameters:', params)
 print('Chi-square:', chi2)
@@ -80,7 +80,7 @@ results = adjuster.monte_carlo_fit(
 )
 
 # Easy data manipulation with xarray
-size_200_data = results.sel(sizes=200)
+size_200_data = results.sel(sizes=200, method='nearest')
 param_convergence = results['param_0'].std(dim='repeats')
 
 # Visualize parameter stability
@@ -95,52 +95,28 @@ Loads and validates data for analysis.
   - `data`: array-like (list, numpy array, pandas Series/DataFrame)
 - **Returns:** `DataProcessor` instance
 
-### `DataProcessor.fit_distribution(distribution)`
-Fits a statistical distribution to the data.
-- **Parameters:**
-  - `distribution`: str or scipy.stats distribution (e.g., 'weibull', 'norm', 'gamma')
-- **Returns:** `DataProcessor` (with fitted distribution)
+### `DataProcessor.fit(distribution, **kwargs)`
+Fits a distribution and returns an immutable `FitResult`.
+`fit_distribution()` remains an alias with the same return type.
 
-### `DataProcessor.get_fitted_params()`
-Returns fitted parameters of the distribution.
-- **Returns:** tuple
+### `FitResult.params` and `FitResult.info`
+The fitted parameter tuple and a dictionary describing the fit.
 
-### `DataProcessor.goodness_of_fit(method, bins='doane')`
-Evaluates the fit using a statistical test.
-- **Parameters:**
-  - `method`: 'chi2', 'ks', or 'rms'
-  - `bins`: binning method (default 'doane')
-- **Returns:** dict with test results
+### `FitResult.goodness_of_fit(method, **kwargs)`
+Accepts `'chi2'`, `'ks'`, `'rmse'`, `'aic'`, and `'bic'`.
+Chi-square and KS return dictionaries; RMSE, AIC, and BIC return floats.
+`bins` controls chi-square binning (default `'doane'`).
 
-### `MagicAdjuster.monte_carlo_fit(sizes=None, n_repeats=20, tests=['ks'], fig_output_path=None, plot_type='series', sampling='random', distribution_params=None, **kwargs)`
-Performs Monte Carlo stability analysis to determine minimum sample size for reliable parameter estimation.
-- **Parameters:**
-  - `sizes`: list, optional - Explicit list of sample sizes
-  - `n_repeats`: int - Repetitions per size (default 20)
-  - `tests`: list - GOF tests to perform ['chi2','ks','rmse']
-  - `fig_output_path`: str, optional - Save 2x3 summary figure if provided (includes red dashed stability lines)
-  - `plot_type`: 'series' or 'boxplots' - Panel style when saving figure
-  - `sampling`: 'random','bootstrap','disjoint' - subsampling strategy
-  - `distribution_params`: tuple, optional - Use fixed params (no refitting)
-  - `bins`: (kwarg) binning method for chi2 (default 'doane')
-  - `fit_kwargs`: (kwarg) constraints passed to fit_distribution
-  - `plot`: str or bool - Plotting option ('series', 'boxplots', True, or False) (default True)
-  - `sampling`: str - Sampling strategy ('random' or 'bootstrap') (default 'random')
-  - `distribution_params`: tuple, optional - Pre-calculated distribution parameters
-  - `bins`: str or int - Binning strategy for chi-square test (default 'doane')
-  - `fit_kwargs`: dict - Additional arguments passed to fit_distribution()
-- **Returns:** xarray.Dataset with dimensions ['sizes', 'repeats'] and variables for parameters and test results
-  - `method`: 'chi2', 'ks', or 'rms'
-  - `bins`: binning method (default 'doane')
-- **Returns:** dict with test results
+### `MagicAdjuster.monte_carlo_fit(...)`
+Returns an `xarray.Dataset` with `sizes` and `repeats` dimensions.
+Fit the distribution on the same adjuster before calling this method.
+Defaults include `n_repeats=20`, `tests=['ks']`, `stability_method='kneedle'`,
+`sampling='random'`, `plot_type='series'`, and `fig_output_path=None`.
+`fit_kwargs` passes fitting constraints; `distribution_params` bypasses refitting.
+See the [Monte Carlo API reference](../api/monte_carlo.rst) for the full signature.
 
 ### `DataProcessor.get_basic_stats()`
-Returns basic statistics of the data.
-- **Returns:** dict
-
-### `DataProcessor.get_distribution_info()`
-Returns info about the fitted distribution.
-- **Returns:** dict
+Returns a dictionary of descriptive statistics.
 
 ## Working with xarray Results
 
@@ -156,7 +132,7 @@ print(results.dims)  # Dimensions: sizes, repeats
 print(results.data_vars)  # Variables: param_0, ks_statistic, ks_pvalue, etc.
 
 # Select data for specific sample size
-size_200 = results.sel(sizes=200)
+size_200 = results.sel(sizes=200, method='nearest')
 print(size_200['param_0'].values)  # All parameter values for size 200
 
 # Calculate statistics across repeats
@@ -175,7 +151,7 @@ results['ks_pvalue'].plot(x='sizes', hue='repeats', alpha=0.5)
 
 # Access metadata and stability points
 stability = results.attrs['stability_points']
-figure = results.attrs['figure']
+figure_path = results.attrs['figure_path']
 ```
 
 ## Goodness-of-Fit Methods
@@ -184,4 +160,4 @@ figure = results.attrs['figure']
 - `'rms'`: Root Mean Square error between observed and estimated PDF
 
 ---
-See also: [example_magic_adjuster.py](example_magic_adjuster.py)
+See also: [MagicAdjuster tutorial](magic_adjuster_tutorial.ipynb)

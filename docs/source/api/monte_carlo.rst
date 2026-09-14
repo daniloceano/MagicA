@@ -23,7 +23,7 @@ Method Signature
         sizes: Optional[List[int]] = None,
         n_repeats: int = 20,
         tests: List[str] = ['ks'],
-        stability_method: str = 'aggregate',
+        stability_method: str = 'kneedle',
         fig_output_path: Optional[str] = None,
         plot_type: str = 'series',
         sampling: str = 'random',
@@ -33,7 +33,7 @@ Method Signature
         n_sizes: int = 10,
         distribution_params: Optional[Tuple] = None,
         **kwargs
-    ) -> xr.Dataset
+    ): ...  # returns xarray.Dataset
 
 Parameters
 ----------
@@ -70,7 +70,7 @@ Monte Carlo Configuration
     
     - ``'random'``: Independent random draws without replacement (most common)
     - ``'bootstrap'``: Random draws with replacement (useful for uncertainty quantification)
-    - ``'disjoint'``: Non-overlapping partitions (best for temporal/spatial data)
+    - ``'disjoint'``: Shuffled partitions, non-overlapping within each shuffle
 
 **seed** : int, optional
     Random seed for reproducibility. Always set this for reproducible analyses.
@@ -109,7 +109,7 @@ Stability Detection
 
     For **CV method**:
     
-    - ``window_size``: Number of consecutive sizes for validation (default: 25% of n_sizes)
+    - ``window_size``: Number of consecutive sizes for validation (default: max(2, n_sizes // 4))
     - ``cv_threshold``: Maximum allowed coefficient of variation (default: 0.1)
     
     For **Kneedle method**:
@@ -169,7 +169,7 @@ Returns an ``xarray.Dataset`` containing:
 - ``sampling_method``: Sampling strategy used
 - ``bins_method``: Binning method used for chi-square test
 - ``stability_points``: Dictionary with detected stability information
-- ``recommended_size``: Sample size where primary metric stabilizes (None if not detected)
+- ``recommended_size``: Sample size where primary metric stabilizes (largest tested size if none is detected; ``primary_metric='max_size'``)
 - ``primary_metric``: The metric used for recommended_size (typically 'rmse')
 - ``stable_pvalue_ks``: KS test p-value at stability point (if 'ks' in tests)
 - ``stable_pvalue_chi2``: Chi-square p-value at stability point (if 'chi2' in tests)
@@ -191,8 +191,8 @@ CV Method (Coefficient of Variation)
 
 **How it works:**
 
-1. For each parameter/test, computes the **coefficient of variation** (CV = std/mean) across repeats at each sample size
-2. Uses a **sliding window** (default: 25% of n_sizes) to check for stability
+1. For each parameter/test, computes the **coefficient of variation** (CV = std/abs(mean)) across repeats at each sample size
+2. Uses a **sliding window** (default: max(2, n_sizes // 4)) to check for stability
 3. Checks if CV stays **below a threshold** (default: 0.1) for all sizes in the window
 4. Returns the first size where this condition is met
 
@@ -200,7 +200,7 @@ CV Method (Coefficient of Variation)
 
 .. math::
 
-    CV_n = \frac{\sigma_n}{\mu_n}
+    CV_n = \frac{\sigma_n}{|\mu_n|}
 
 Where:
 - :math:`\sigma_n` = standard deviation across repeats at size n
@@ -315,7 +315,7 @@ Plateau Method (Relative Gain Heuristic)
    
    .. math::
    
-       \\Delta_i = \\frac{|y_{i-1} - y_i|}{|y_{i-1}|}
+       \Delta_i = \frac{|y_{i-1} - y_i|}{|y_{i-1}|}
 
 2. Checks if relative change stays **below tolerance** for L consecutive points
 3. Returns the first point where this "plateau" condition is met
@@ -398,15 +398,21 @@ Choose the appropriate method based on your metric and goals:
 
 .. code-block:: python
 
+    import numpy as np
+    from magica.core import MagicAdjuster
+
+    adjuster = MagicAdjuster(np.random.default_rng(42).weibull(2, 1000))
+    adjuster.fit_distribution('weibull_min')
+
     # 1. Use Kneedle for RMSE (most reliable)
-    results_rmse = processor.monte_carlo_fit(
+    results_rmse = adjuster.monte_carlo_fit(
         tests=['rmse'],
         stability_method='kneedle',
         smooth=True
     )
     
     # 2. Use CV for p-values (robust to noise)
-    results_pvalues = processor.monte_carlo_fit(
+    results_pvalues = adjuster.monte_carlo_fit(
         tests=['ks', 'chi2'],
         stability_method='cv',
         cv_threshold=0.15  # Can relax for p-values
@@ -435,13 +441,13 @@ Each stability point contains:
     recommended_n = results.attrs['recommended_size']
     primary_metric = results.attrs['primary_metric']
     
-    if recommended_n:
+    if primary_metric != 'max_size':
         print(f"✓ {primary_metric.upper()} stable at n = {recommended_n}")
         
         # Get quality metrics at stable point
-        if 'stable_rmse' in results.attrs:
+        if results.attrs.get('stable_rmse') is not None:
             print(f"  RMSE at stable point: {results.attrs['stable_rmse']:.4f}")
-        if 'stable_pvalue_ks' in results.attrs:
+        if results.attrs.get('stable_pvalue_ks') is not None:
             print(f"  KS p-value at stable point: {results.attrs['stable_pvalue_ks']:.4f}")
     else:
         print("✗ No stability detected - try larger sample sizes")
@@ -501,17 +507,17 @@ Accessing Stability Information
     recommended_n = results.attrs['recommended_size']
     primary_metric = results.attrs['primary_metric']
     
-    if recommended_n is not None:
+    if primary_metric != 'max_size':
         print(f"✓ {primary_metric.upper()} stabilizes at n = {recommended_n}")
         print(f"  This is the recommended minimum sample size")
         
         # Get quality metrics at the stable point
         print(f"\nMetrics at stable point (n = {recommended_n}):")
-        if 'stable_rmse' in results.attrs:
+        if results.attrs.get('stable_rmse') is not None:
             print(f"  RMSE: {results.attrs['stable_rmse']:.4f}")
-        if 'stable_pvalue_ks' in results.attrs:
+        if results.attrs.get('stable_pvalue_ks') is not None:
             print(f"  KS p-value: {results.attrs['stable_pvalue_ks']:.4f}")
-        if 'stable_pvalue_chi2' in results.attrs:
+        if results.attrs.get('stable_pvalue_chi2') is not None:
             print(f"  Chi-square p-value: {results.attrs['stable_pvalue_chi2']:.4f}")
     else:
         print("✗ No clear stability detected - try larger sample sizes or more repeats")
@@ -537,10 +543,12 @@ Complete Example
     # Load data
     data = np.random.weibull(2, 10000) * 8 + 2
     processor = ma.read_data(data)
-    processor.fit_distribution('weibull_min')
+    from magica.core import MagicAdjuster
+    adjuster = MagicAdjuster(processor)
+    fit = adjuster.fit_distribution('weibull_min')
     
     # Run comprehensive Monte Carlo analysis with Kneedle method
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         sizes=[100, 200, 400, 600, 800, 1000, 1500, 2000, 3000, 4000],
         n_repeats=50,
         tests=['ks', 'chi2', 'rmse'],  # Include RMSE!
@@ -591,7 +599,7 @@ Each subsample is drawn **independently without replacement** from the original 
 
 .. code-block:: python
 
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         sampling='random',
         seed=42
     )
@@ -611,7 +619,7 @@ Each subsample is drawn **with replacement**, allowing the same observation to a
 
 .. code-block:: python
 
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         sampling='bootstrap',
         seed=42
     )
@@ -619,7 +627,9 @@ Each subsample is drawn **with replacement**, allowing the same observation to a
 Disjoint Sampling
 ~~~~~~~~~~~~~~~~~
 
-Data is divided into **non-overlapping partitions**. Each observation is used exactly once per sample size.
+Indices are shuffled and divided into **non-overlapping partitions within each
+shuffle**. Further shuffles can reuse observations when more repeats are needed;
+the method does not preserve temporal order or perform temporal segmentation.
 
 **When to use:**
 
@@ -632,7 +642,7 @@ Data is divided into **non-overlapping partitions**. Each observation is used ex
 
 .. code-block:: python
 
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         sampling='disjoint',
         seed=42
     )
@@ -652,11 +662,11 @@ For very large datasets (>10,000 samples), statistical tests become extremely po
 2. P-values haven't yet inflated (interpretable tests)
 3. RMSE has stabilized (good fit quality)
 
-See the :doc:`/tutorials/magic_adjuster_tutorial` for a complete demonstration.
+See the :doc:`/tutorials/magic_adjuster_tutorial` for a complete synthetic-data demonstration.
 
 See Also
 --------
 
-- :doc:`/tutorials/magic_adjuster_tutorial`: Complete tutorial with real data examples
+- :doc:`/tutorials/magic_adjuster_tutorial`: Complete tutorial with synthetic data examples
 - :doc:`core`: API reference for MagicAdjuster class
 - :doc:`/tutorials/auto_fitter_tutorial`: Automatic distribution selection
