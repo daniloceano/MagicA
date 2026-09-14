@@ -61,12 +61,15 @@ between the empirical and fitted CDFs. See :doc:`api/core` for the full API.
     chi2_result = fit.goodness_of_fit('chi2')
     print(f"Chi-square p-value: {chi2_result['p_value']:.4f}")
     
-    # Calculate RMSE (recommended)
+    # Calculate CDF RMSE
     rmse_result = fit.goodness_of_fit('rmse')
     print(f"RMSE: {rmse_result:.6f}")
 
 .. tip::
-   **RMSE is the most reliable metric** for assessing fit quality, especially with large datasets where p-values can be misleading due to the "large sample size effect".
+   MagicA recommends RMSE as the primary selection criterion. In the empirical
+   tests that motivated the package, its curve produced a clearer stability
+   point than the p-value curves. Use test results and plots as complementary
+   diagnostics, especially in the region of practical interest.
 
 Automatic Distribution Selection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -75,7 +78,7 @@ Use AutoFitter to automatically find the best distribution:
 
 .. code-block:: python
 
-    # Create AutoFitter with RMSE criterion (recommended)
+    # Use CDF RMSE as the initial ranking criterion
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     
     # Find best distribution
@@ -155,7 +158,7 @@ Analyze extreme values and calculate return periods for time series data:
 Monte Carlo Stability Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Determine the minimum sample size needed for stable parameter estimation:
+Examine how parameter estimates and diagnostics vary with sample size:
 
 .. code-block:: python
 
@@ -167,7 +170,7 @@ Determine the minimum sample size needed for stable parameter estimation:
     # Run Monte Carlo analysis with automatic figure generation
     results = adjuster.monte_carlo_fit(
         n_repeats=100,
-        tests=['ks', 'chi2', 'rmse'],  # Always include RMSE!
+        tests=['ks', 'chi2', 'rmse'],  # Compare tests with CDF distance
         fig_output_path='stability_analysis.png'
     )
     
@@ -179,12 +182,15 @@ Determine the minimum sample size needed for stable parameter estimation:
     # Check stability points
     stability = results.attrs['stability_points']
     
-    # RMSE is the most reliable stability indicator
+    # Inspect the RMSE result for the selected detector
     if 'rmse' in stability:
-        print(f"Recommended minimum size (RMSE): {stability['rmse']['size']}")
+        print(f"Detected RMSE stability point: {stability['rmse']['size']}")
 
 .. important::
-   **Always include 'rmse' in your tests** - RMSE provides the most reliable stability detection with smooth, monotonic convergence, unlike p-values which can be erratic.
+   Include ``'rmse'`` when CDF distance is relevant. Its curve may show a clear
+   bend or plateau, but monotonic convergence is not guaranteed. Interpret the
+   detected point within the tested grid and compare it with variability across
+   repeats and the other diagnostics.
 
 .. _qs-xarray:
 
@@ -436,7 +442,7 @@ The `monte_carlo_fit` method returns an xarray Dataset with:
     if 'param_0' in stability:
         print(f"Parameter 0 stabilizes at size: {stability['param_0']['size']}")
     
-    # RMSE stability (most reliable)
+    # RMSE stability result for the selected detector
     if 'rmse' in stability:
         print(f"RMSE stabilizes at size: {stability['rmse']['size']}")
 
@@ -764,29 +770,32 @@ Best Practices
 Distribution Selection
 ~~~~~~~~~~~~~~~~~~~~~~
 
-1. **Use RMSE as primary criterion** for real-world data
+1. **Use RMSE as MagicA's empirically recommended primary criterion**
 2. **Start with AutoFitter's default list** (16 stable distributions) for quick analysis
-3. **Test comprehensive set** (113+ distributions) when you need the absolute best fit
+3. **Expand the candidate set carefully** when the default list is insufficient
 4. **Create domain-specific lists** (e.g., wind, rainfall) for faster, targeted analysis
-5. **Avoid p-value-only selection** with large datasets (>10,000 samples)
+5. **Use p-values as diagnostics**, considering calibration and multiple comparisons
 
 Monte Carlo Analysis
 ~~~~~~~~~~~~~~~~~~~~~
 
-1. **Always include 'rmse' in tests** - most reliable stability indicator
-2. **Use 100+ repeats** for robust stability detection
+1. **Use RMSE as the primary stability signal**, following MagicA's empirical recommendation
+2. **Increase repeats until the interpretation is insensitive to that choice**
 3. **Choose appropriate sampling**:
    - `'random'` - General purpose, allows overlap
    - `'bootstrap'` - With replacement, good for uncertainty
    - `'disjoint'` - No overlap, limited by data size
 4. **Generate summary figures** with `fig_output_path` for visual inspection
-5. **Check RMSE stability first**, then validate with other metrics
+5. **Compare detector results and inspect the curves visually**
 
 Large Sample Size Effect
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. warning::
-   With large datasets (>10,000 observations), goodness-of-fit tests (KS, Chi-square) tend to reject even excellent fits. **Use RMSE for large datasets.**
+   As sample size grows, goodness-of-fit tests can detect smaller departures
+   from a candidate distribution. There is no universal sample-size cutoff.
+   Interpret statistical significance together with discrepancy magnitude,
+   location, and practical importance.
 
 See the :doc:`tutorials/magic_adjuster_tutorial` section on "Large Sample Size Effect" for detailed explanation and examples.
 

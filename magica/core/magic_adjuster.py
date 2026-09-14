@@ -620,8 +620,8 @@ class MagicAdjuster:
         Monte Carlo stability analysis for distribution fitting.
 
         Evaluates how stable distribution parameters and goodness-of-fit
-        statistics are across different sample sizes, helping to identify the
-        minimum sample size required for reliable parameter estimation.
+        statistics are across different sample sizes and reports stability
+        points detected within the tested grid.
 
         Parameters
         ----------
@@ -632,7 +632,8 @@ class MagicAdjuster:
             Repetitions per size.
         tests : list of str, default ``['ks']``
             Goodness-of-fit tests: ``'ks'``, ``'chi2'``, ``'rmse'``.
-            Include ``'rmse'`` for best stability detection.
+            Include ``'rmse'`` when a CDF-distance measure is useful alongside
+            test statistics and p-values.
         stability_method : str, default ``'kneedle'``
             ``'cv'``, ``'kneedle'``, ``'plateau'``, ``'aggregate'``,
             ``'detect'`` (alias for ``'cv'``), or ``None``/``'none'``.
@@ -663,8 +664,8 @@ class MagicAdjuster:
 
         Examples
         --------
-        >>> fit = data.fit('weibull', floc=0)
         >>> adjuster = data._get_adjuster()
+        >>> fit = adjuster.fit_distribution('weibull', floc=0)
         >>> results = adjuster.monte_carlo_fit(
         ...     tests=['ks', 'rmse'], stability_method='kneedle'
         ... )

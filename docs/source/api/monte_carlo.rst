@@ -1,17 +1,20 @@
 Monte Carlo Stability Analysis
 ==============================
 
-The Monte Carlo stability analysis is a powerful method to determine the minimum sample size needed for reliable parameter estimation and to assess how statistical tests behave with different sample sizes.
+Monte Carlo stability analysis examines how fitted parameters and diagnostics
+vary across a user-defined grid of sample sizes. It reports points selected by a
+stability detector; these points are empirical summaries of the configured run,
+not universal minimum sample sizes.
 
 Overview
 --------
 
 The ``monte_carlo_fit()`` method performs repeated subsampling and distribution fitting to:
 
-1. Identify the minimum sample size where parameters stabilize
+1. Identify where parameter estimates appear stable within the tested grid
 2. Track how goodness-of-fit tests evolve with sample size
-3. Detect the "large sample size effect" where p-values become unreliable
-4. Provide empirical distributions for robust inference
+3. Show how increasing test power affects p-values for small model departures
+4. Store the distribution of results across repeated subsamples
 
 Method Signature
 ----------------
@@ -59,16 +62,20 @@ Monte Carlo Configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **n_repeats** : int, default=20
-    Number of independent subsamples to draw for each sample size. Higher values provide better statistical estimates but increase computation time.
+    Number of subsamples to draw for each sample size. More repeats describe
+    Monte Carlo variability more precisely but increase computation time.
     
     - For quick exploration: 10-20 repeats
-    - For production analysis: 30-50 repeats
-    - For publication-quality results: 50-100 repeats
+    - For a more stable summary: 30-50 repeats
+    - For a detailed sensitivity analysis: 50-100 repeats
+
+    These ranges are starting points rather than accuracy guarantees. Check
+    whether conclusions change when the number of repeats is increased.
 
 **sampling** : str, default='random'
     Sampling strategy for creating subsamples. Options:
     
-    - ``'random'``: Independent random draws without replacement (most common)
+    - ``'random'``: Random draws without replacement within each draw (most common)
     - ``'bootstrap'``: Random draws with replacement (useful for uncertainty quantification)
     - ``'disjoint'``: Shuffled partitions, non-overlapping within each shuffle
 
@@ -85,7 +92,11 @@ Goodness-of-Fit Tests
     - ``'chi2'``: Chi-square test (p-value based)
     - ``'rmse'``: Root Mean Square Error (distance metric)
     
-    **⭐ Recommendation**: Always include ``'rmse'`` for stability detection, as it shows clearer convergence behavior than p-value based tests.
+    MagicA recommends ``'rmse'`` as the primary stability signal. In the
+    empirical tests that motivated the method, RMSE produced a clearer stability
+    point than the p-value curves. KS and chi-square results remain useful as
+    complementary diagnostics. AIC and BIC are not calculated by
+    ``monte_carlo_fit()`` and their stability was not evaluated in this workflow.
     
     Example: ``tests=['ks', 'chi2', 'rmse']``
 
@@ -95,13 +106,14 @@ Stability Detection
 **stability_method** : str, default='kneedle'
     Method for detecting when parameters and tests have stabilized. Options:
     
-    - ``'kneedle'``: Kneedle algorithm for elbow detection (default, best for RMSE)
-    - ``'cv'``: Coefficient of Variation method (robust for erratic metrics)
+    - ``'kneedle'``: Kneedle algorithm for elbow detection (default)
+    - ``'cv'``: Coefficient of Variation method
     - ``'plateau'``: Relative gain heuristic (early "good enough" detection)
     - ``'aggregate'``: Legacy median-based method (still supported)
     - ``None``: No stability detection
     
-    **⭐ Default: 'kneedle'** - Recommended for RMSE stability detection as it excels at finding the "point of diminishing returns" in smooth, converging metrics.
+    Kneedle is useful when the summarized curve has a visible bend. Its result
+    can change with the sample-size grid and smoothing configuration.
 
     See `Stability Detection Methods`_ for detailed explanations and selection guidance.
 
@@ -169,7 +181,8 @@ Returns an ``xarray.Dataset`` containing:
 - ``sampling_method``: Sampling strategy used
 - ``bins_method``: Binning method used for chi-square test
 - ``stability_points``: Dictionary with detected stability information
-- ``recommended_size``: Sample size where primary metric stabilizes (largest tested size if none is detected; ``primary_metric='max_size'``)
+- ``recommended_size``: Detected size for the primary metric; if none is
+  detected, the largest tested size is returned with ``primary_metric='max_size'``
 - ``primary_metric``: The metric used for recommended_size (typically 'rmse')
 - ``stable_pvalue_ks``: KS test p-value at stability point (if 'ks' in tests)
 - ``stable_pvalue_chi2``: Chi-square p-value at stability point (if 'chi2' in tests)
@@ -184,7 +197,9 @@ Returns an ``xarray.Dataset`` containing:
 Stability Detection Methods
 ----------------------------
 
-MagicA provides three advanced methods for detecting when parameters and goodness-of-fit metrics have stabilized. Each method has specific strengths depending on the metric behavior.
+MagicA provides three current detection methods plus the legacy aggregate
+method. Each applies a different operational definition of stability, so compare
+the result with the plotted curves and test its sensitivity to configuration.
 
 CV Method (Coefficient of Variation)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -208,14 +223,14 @@ Where:
 
 **Advantages:**
 
-- Robust to erratic metrics (especially p-values)
-- Provides quantitative measure of variability
-- Good for assessing precision of estimates
-- Works well with any number of repeats
+- Expresses dispersion relative to the mean
+- Provides a quantitative variability threshold
+- Can require stability across consecutive tested sizes
 
 **Disadvantages:**
 
-- May be conservative (detects stability later than other methods)
+- Becomes unstable or very large when the mean is close to zero
+- Can be difficult to interpret for bounded, skewed quantities such as p-values
 - Less sensitive to smooth convergence patterns
 
 **Parameters:**
@@ -237,10 +252,11 @@ Where:
         }
     }
 
-**When to use:** 
-- When working with erratic p-values (KS, Chi-square)
-- When you need quantitative variability assessment
-- When conservative estimates are preferred
+**When to use:**
+
+- When relative variability across repeats is meaningful
+- When the metric mean stays sufficiently far from zero
+- When the CV threshold can be justified and checked for sensitivity
 
 Kneedle Method (Elbow Detection)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -266,16 +282,17 @@ Where:
 
 **Advantages:**
 
-- **Optimal for RMSE**: Excels at finding "point of diminishing returns" in smooth curves
-- Clear mathematical definition of "elbow"
+- Identifies a point of diminishing change in curves with a visible bend
+- Uses an explicit mathematical definition of an elbow
 - Automatic curve direction detection
-- Smoothing reduces noise sensitivity
+- Optional smoothing can reduce local noise
 - Based on published algorithm (Satopää et al., 2011)
 
 **Disadvantages:**
 
 - Requires relatively smooth convergence
 - May not work well with highly erratic metrics
+- Sensitive to the tested grid and smoothing choices
 
 **Parameters:**
 
@@ -297,10 +314,10 @@ Where:
     }
 
 **When to use:**
-- **⭐ RECOMMENDED for RMSE stability detection**
+
 - When metrics show smooth, monotonic convergence
-- When you want to find the "sweet spot" of diminishing returns
-- For production analyses requiring objective elbow detection
+- When you want to identify a geometric bend associated with diminishing changes
+- When you can inspect sensitivity to the grid and smoothing settings
 
 **Reference:**
 
@@ -377,41 +394,45 @@ Method Selection Guide
 Choose the appropriate method based on your metric and goals:
 
 +----------------+------------------+---------------------+-------------------------+
-| Method         | Best For         | Strengths           | Typical Use Case        |
+| Method         | Suitable for     | Main signal         | Main limitation         |
 +================+==================+=====================+=========================+
-| **Kneedle**    | RMSE, converging | Objective elbow     | **Production RMSE**     |
-|                | parameters       | detection, smooth   | **analysis**            |
-|                |                  | curves              | **(RECOMMENDED)**       |
+| **Kneedle**    | Smooth curves    | Geometric bend      | Grid and smoothing      |
+|                | with a bend      |                     | sensitivity             |
 +----------------+------------------+---------------------+-------------------------+
-| **CV**         | P-values (KS,    | Robust to noise,    | P-value stability,      |
-|                | Chi-square)      | quantifies          | conservative estimates  |
-|                |                  | variability         |                         |
+| **CV**         | Relative         | Dispersion across   | Mean near zero and      |
+|                | variability      | repeats             | bounded metrics         |
 +----------------+------------------+---------------------+-------------------------+
-| **Plateau**    | Early detection, | Fast, intuitive,    | Quick exploration,      |
-|                | limited budget   | early stopping      | iterative tuning        |
+| **Plateau**    | Small relative   | Consecutive changes | Tolerance sensitivity   |
+|                | changes          | below tolerance     |                         |
 +----------------+------------------+---------------------+-------------------------+
-| **Aggregate**  | Legacy analyses  | Simple, robust      | Backward compatibility  |
-|                |                  |                     |                         |
+| **Aggregate**  | Legacy analyses  | Median-based rule   | Kept for compatibility  |
 +----------------+------------------+---------------------+-------------------------+
 
 **Recommended Workflow:**
 
+Use Kneedle on the RMSE curve as the primary analysis, following the empirical
+workflow used to develop MagicA. Inspect p-value curves separately because they
+answer a different question and commonly respond strongly to increasing sample
+size.
+
 .. code-block:: python
 
     import numpy as np
-    from magica.core import MagicAdjuster
+    import magica as ma
 
-    adjuster = MagicAdjuster(np.random.default_rng(42).weibull(2, 1000))
+    data = np.random.default_rng(42).weibull(2, 1000)
+    processor = ma.read_data(data)
+    adjuster = processor._get_adjuster()
     adjuster.fit_distribution('weibull_min')
 
-    # 1. Use Kneedle for RMSE (most reliable)
+    # Apply Kneedle to the RMSE curve
     results_rmse = adjuster.monte_carlo_fit(
         tests=['rmse'],
         stability_method='kneedle',
         smooth=True
     )
     
-    # 2. Use CV for p-values (robust to noise)
+    # Inspect the test outputs as complementary diagnostics
     results_pvalues = adjuster.monte_carlo_fit(
         tests=['ks', 'chi2'],
         stability_method='cv',
@@ -419,8 +440,9 @@ Choose the appropriate method based on your metric and goals:
     )
     
     # 3. Compare stability points
-    rmse_stable = results_rmse.attrs['recommended_size']
-    print(f"RMSE stable at n = {rmse_stable} (MOST RELIABLE)")
+    rmse_size = results_rmse.attrs['recommended_size']
+    rmse_metric = results_rmse.attrs['primary_metric']
+    print(f"RMSE run: {rmse_metric} at n = {rmse_size}")
 
 Interpreting Stability Points
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -437,12 +459,12 @@ Each stability point contains:
 
 .. code-block:: python
 
-    # Get recommended size (based on primary metric, usually RMSE)
-    recommended_n = results.attrs['recommended_size']
+    # Inspect the primary result and distinguish detection from fallback
+    primary_size = results.attrs['recommended_size']
     primary_metric = results.attrs['primary_metric']
     
     if primary_metric != 'max_size':
-        print(f"✓ {primary_metric.upper()} stable at n = {recommended_n}")
+        print(f"{primary_metric.upper()} stability detected at n = {primary_size}")
         
         # Get quality metrics at stable point
         if results.attrs.get('stable_rmse') is not None:
@@ -450,14 +472,14 @@ Each stability point contains:
         if results.attrs.get('stable_pvalue_ks') is not None:
             print(f"  KS p-value at stable point: {results.attrs['stable_pvalue_ks']:.4f}")
     else:
-        print("✗ No stability detected - try larger sample sizes")
+        print(f"No stability detected; largest tested size = {primary_size}")
 
 **If stability is not detected:**
 
-- The tested sample sizes are too small - increase ``max_size``
-- The metric has high variability - increase ``n_repeats``
-- The threshold is too strict - relax method-specific parameters
-- The data distribution may not be appropriate
+- Inspect the curve before changing the configuration
+- Test whether increasing ``max_size`` or ``n_repeats`` changes the result
+- Examine sensitivity to method-specific thresholds and smoothing
+- Reconsider whether the selected metric and candidate distribution suit the goal
 
 Recommended Practices
 ---------------------
@@ -465,54 +487,63 @@ Recommended Practices
 Choosing Sample Sizes
 ~~~~~~~~~~~~~~~~~~~~~
 
+The following grids are examples. Choose limits and spacing that cover the
+sample sizes relevant to the application, then check whether a finer or wider
+grid changes the detected point.
+
 .. code-block:: python
 
-    # For small to medium datasets (< 5000 samples)
+    # A compact exploratory grid
     sizes = [50, 100, 200, 400, 600, 800]
     
-    # For large datasets (> 10000 samples) - CPS method
+    # A wider grid for examining later changes
     sizes = [100, 200, 400, 600, 800, 1000, 1500, 2000, 3000, 4000]
 
 Using RMSE for Stability Detection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**⭐ Always include RMSE in your tests for stability detection:**
+Use RMSE as the primary stability signal, following MagicA's empirical
+recommendation, and track test statistics and p-values alongside it:
 
 .. code-block:: python
 
     results = adjuster.monte_carlo_fit(
         sizes=[100, 200, 500, 1000, 2000],
         n_repeats=50,
-        tests=['ks', 'chi2', 'rmse'],  # RMSE is crucial!
+        tests=['ks', 'chi2', 'rmse'],
         sampling='random',
         seed=42
     )
 
-**Why RMSE is recommended:**
+**How to interpret RMSE here:**
 
-1. **Monotonic decrease**: RMSE decreases smoothly as sample size increases
-2. **Clear convergence**: Stabilization point is visually obvious
-3. **Robust**: Less affected by sampling variability than p-values
-4. **Direct measure**: Measures actual fit quality, not hypothesis test power
-5. **No inflation**: Unlike p-values, doesn't become artificially small with large samples
+1. It directly summarizes CDF distance on the sampled observations.
+2. It is not a hypothesis test and therefore does not encode a significance threshold.
+3. In the tests that motivated MagicA, its curve produced a clearer stability
+   point than the p-value curves.
+4. It gives equal weight to the evaluated CDF points and may not emphasize tail discrepancies.
+5. It does not penalize model complexity. AIC/BIC can complement distribution
+   selection when finite, but they are not implemented as Monte Carlo metrics
+   here and their stability has not been evaluated by this workflow.
 
-P-values (KS, Chi-square) can be erratic and are subject to the "large sample size effect" where they become very small even for good fits when the sample is large.
+P-values answer a different question. As sample size grows, tests can detect
+smaller departures from the candidate distribution, including departures that
+may be negligible for the intended application.
 
 Accessing Stability Information
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    # Get recommended size (based on primary metric, typically RMSE)
-    recommended_n = results.attrs['recommended_size']
+    # Inspect the primary result and distinguish detection from fallback
+    primary_size = results.attrs['recommended_size']
     primary_metric = results.attrs['primary_metric']
     
     if primary_metric != 'max_size':
-        print(f"✓ {primary_metric.upper()} stabilizes at n = {recommended_n}")
-        print(f"  This is the recommended minimum sample size")
+        print(f"{primary_metric.upper()} stability detected at n = {primary_size}")
         
         # Get quality metrics at the stable point
-        print(f"\nMetrics at stable point (n = {recommended_n}):")
+        print(f"\nMetrics at detected point (n = {primary_size}):")
         if results.attrs.get('stable_rmse') is not None:
             print(f"  RMSE: {results.attrs['stable_rmse']:.4f}")
         if results.attrs.get('stable_pvalue_ks') is not None:
@@ -520,7 +551,7 @@ Accessing Stability Information
         if results.attrs.get('stable_pvalue_chi2') is not None:
             print(f"  Chi-square p-value: {results.attrs['stable_pvalue_chi2']:.4f}")
     else:
-        print("✗ No clear stability detected - try larger sample sizes or more repeats")
+        print(f"No stability detected; largest tested size = {primary_size}")
     
     # Access individual stability points for all metrics
     stability = results.attrs['stability_points']
@@ -551,21 +582,22 @@ Complete Example
     results = adjuster.monte_carlo_fit(
         sizes=[100, 200, 400, 600, 800, 1000, 1500, 2000, 3000, 4000],
         n_repeats=50,
-        tests=['ks', 'chi2', 'rmse'],  # Include RMSE!
-        stability_method='kneedle',     # Use Kneedle for RMSE
+        tests=['ks', 'chi2', 'rmse'],
+        stability_method='kneedle',     # Detect bends in summarized curves
         smooth=True,                    # Smooth curves before detection
         sampling='random',
         seed=42,
         fig_output_path='monte_carlo_analysis.png'
     )
     
-    # Check recommended size (based on RMSE with Kneedle)
-    recommended_n = results.attrs['recommended_size']
+    # Inspect whether a primary stability point was detected
+    primary_size = results.attrs['recommended_size']
     primary_metric = results.attrs['primary_metric']
     
-    print(f"⭐ {primary_metric.upper()} stabilizes at n = {recommended_n} (RECOMMENDED)")
-    print(f"   RMSE at stable point: {results.attrs['stable_rmse']:.4f}")
-    print(f"   KS p-value at stable point: {results.attrs['stable_pvalue_ks']:.4f}")
+    if primary_metric == 'max_size':
+        print(f"No stability detected; largest tested size = {primary_size}")
+    else:
+        print(f"{primary_metric.upper()} stability detected at n = {primary_size}")
     
     # Check all stability points
     stability = results.attrs['stability_points']
@@ -578,8 +610,8 @@ Complete Example
         else:
             print(f"   {metric}: no clear stability detected")
     
-    # Use the recommended size for robust inference
-    print(f"\nRecommended subsample size for production: {recommended_n}")
+    # Treat this as a configuration-dependent result, not a universal minimum
+    print(f"\nPrimary result: {primary_metric} at n = {primary_size}")
 
 Sampling Strategies
 -------------------
@@ -612,7 +644,7 @@ Each subsample is drawn **with replacement**, allowing the same observation to a
 **When to use:**
 
 - Uncertainty quantification
-- Confidence interval estimation
+- Exploring sampling variability when bootstrap assumptions are appropriate
 - When subsample size > original data size
 
 **Example:**
@@ -633,10 +665,12 @@ the method does not preserve temporal order or perform temporal segmentation.
 
 **When to use:**
 
-- Time series data
-- Spatially correlated data
-- When you want lower variance between repeats
-- More representative of data structure
+- When non-overlap within each shuffled partition is useful
+- When you want to limit reuse before starting another shuffle
+- When temporal or spatial ordering is not required
+
+This strategy does not preserve time or spatial structure. Segment or resample
+dependent data explicitly when the application requires it.
 
 **Example:**
 
@@ -650,17 +684,24 @@ the method does not preserve temporal order or perform temporal segmentation.
 Large Sample Size Effect
 -------------------------
 
-For very large datasets (>10,000 samples), statistical tests become extremely powerful, causing:
+As sample size grows, goodness-of-fit tests gain power and can detect
+increasingly small departures from a candidate distribution. There is no
+universal sample size at which this begins. Possible consequences include:
 
-- P-values become very small even for negligible deviations
+- Very small p-values for deviations that may be negligible in practice
 - Difficulty distinguishing statistical from practical significance
-- Over-rejection of perfectly adequate distributions
+- Rejection of models that may still be adequate for a specific use
 
-**Solution**: Use the Monte Carlo CPS (Coefficient/P-value/Sample size) method to find the optimal subsample size where:
+Monte Carlo stability analysis helps describe this behavior by showing how the
+following quantities change over a chosen range of sample sizes:
 
-1. Parameters have converged (stable estimates)
-2. P-values haven't yet inflated (interpretable tests)
-3. RMSE has stabilized (good fit quality)
+1. Fitted parameter estimates
+2. Test statistics and p-values
+3. CDF RMSE
+
+A detected point is conditional on the sampled data, grid, number of repeats,
+metric, and detector settings. It should be interpreted with domain knowledge
+and does not by itself establish an optimal sample size or model adequacy.
 
 See the :doc:`/tutorials/magic_adjuster_tutorial` for a complete synthetic-data demonstration.
 

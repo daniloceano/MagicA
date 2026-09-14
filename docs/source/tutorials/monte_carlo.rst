@@ -19,6 +19,11 @@ Carlo stability workflow tracks changes in parameters and goodness-of-fit metric
 sample sizes. The stability detector does not test whether a p-value exceeds
 a significance threshold; stability and goodness-of-fit acceptance are distinct.
 
+MagicA recommends RMSE as the primary stability signal. This is an empirical
+recommendation: in the wind-speed analyses used to develop the method, RMSE
+produced a clearer and more usable stability point than the KS and chi-square
+p-value curves. The p-values remain complementary diagnostics.
+
 
 Methodology (what we do)
 -------------------------
@@ -101,10 +106,10 @@ Where :math:`y_i` is the normalized curve value at point i.
 
 **When to use**:
 
-- **RMSE and converging parameters** (RECOMMENDED)
+- RMSE or parameter curves with a visible bend
 - Smooth, monotonic convergence patterns
 - Finding "point of diminishing returns"
-- Production analyses requiring objective detection
+- Analyses where sensitivity to grid choice and smoothing can be checked
 
 **Parameters** (via kwargs):
 
@@ -151,31 +156,35 @@ Method Selection Guide
 ~~~~~~~~~~~~~~~~~~~~~~
 
 +----------------+------------------+-------------------------+
-| Method         | Best For         | Typical Use Case        |
+| Method         | Suitable for     | Main limitation         |
 +================+==================+=========================+
-| **Kneedle**    | RMSE,            | Production RMSE         |
-|                | parameters       | analysis (RECOMMENDED)  |
+| **Kneedle**    | Curves with a    | Sensitive to the grid   |
+|                | visible bend     | and smoothing           |
 +----------------+------------------+-------------------------+
-| **CV**         | P-values         | Conservative p-value    |
-|                | (KS, Chi²)       | stability               |
+| **CV**         | Relative         | Unstable when the mean  |
+|                | variability      | is close to zero        |
 +----------------+------------------+-------------------------+
-| **Plateau**    | Early detection, | Quick exploration,      |
-|                | limited budget   | iterative tuning        |
+| **Plateau**    | Small relative   | Sensitive to tolerance  |
+|                | changes          | and consecutive points  |
 +----------------+------------------+-------------------------+
 
 **Recommended workflow**:
 
+Use Kneedle on RMSE as the primary analysis, then inspect the p-value and
+parameter curves as complementary information. AIC and BIC are not outputs of
+``monte_carlo_fit()`` and their stability was not evaluated in this workflow.
+
 .. code-block:: python
 
-    # Use Kneedle for RMSE (most reliable)
+    # Apply Kneedle to an RMSE curve and inspect the result
     results = adjuster.monte_carlo_fit(
         tests=['rmse'],
         stability_method='kneedle',
         smooth=True
     )
     
-    recommended_n = results.attrs['recommended_size']
-    print(f"RMSE stable at n = {recommended_n}")
+    detected_n = results.attrs['recommended_size']
+    print(f"Detected RMSE stability point: n = {detected_n}")
 
 Sampling strategies
 -------------------
@@ -209,9 +218,9 @@ how to choose between them.
     blocks of length `size`. Each block is a subsample with no shared indices.
   - Constraint: `size` must be <= `N`. The number of blocks per shuffle is
     `N // size`; for `n_repeats` larger than that, additional shuffles are used.
-  - When to use: Use when you want independent partitions (similar to simple
-    cross-validation) and want to avoid overlap between subsamples within the
-    same shuffle.
+  - When to use: Use when you want to avoid overlap between subsamples within
+    the same shuffle. Blocks from one partition are not statistically
+    independent merely because they do not overlap.
 
 Reproducibility and seed
 ------------------------
@@ -223,12 +232,12 @@ Reproducibility and seed
 Practical guidance
 ------------------
 
-- Use `random` as a safe default when `size <= N` and you want unbiased
-  subsamples without duplicates.
+- Use `random` as the default when `size <= N` and you want subsamples without
+  duplicates within each draw.
 - Use `bootstrap` when you need to estimate uncertainty from resampling or when
   you want to allow `size >= N`.
-- Use `disjoint` when you need non-overlapping partitions to compare independent
-  fits or to maximize coverage of the original dataset without duplication.
+- Use `disjoint` when you need non-overlapping partitions within each shuffle or
+  want to maximize coverage before observations are reused.
 
 See `_generate_subsample_indices()` source for exact behaviour and edge-case
 handling.
@@ -237,13 +246,17 @@ Outputs
 -------
 
 - An `xarray.Dataset` with dimensions:
+
   - `sizes`: tested sample sizes
   - `repeats`: repetition index
+
 - Data variables: `param_0, param_1, ...`, `ks_statistic`, `ks_pvalue`,
   `chi2_statistic`, `chi2_pvalue`, `rmse` (depending on `tests`).
 - Attributes: 
+
   - `stability_points`: dict of detected sizes per variable with method info
-  - `recommended_size`: sample size where primary metric stabilizes
+  - `recommended_size`: detected size for the primary metric, or the largest
+    tested size when no stability point is detected
   - `primary_metric`: the metric used for recommended_size (typically 'rmse')
   - `stable_pvalue_ks`, `stable_pvalue_chi2`, `stable_rmse`: metric values at stable point
   - `figure_path`: path to saved figure (if generated)
@@ -255,10 +268,12 @@ Quick example
 .. code-block:: python
 
     import numpy as np
+    import magica as ma
     from magica.core import MagicAdjuster
 
     data = np.random.weibull(2, 1000)
-    adjuster = MagicAdjuster(data)
+    processor = ma.read_data(data)
+    adjuster = MagicAdjuster(processor)
     adjuster.fit_distribution('weibull_min')
 
     # Use Kneedle method for RMSE stability detection
@@ -266,7 +281,7 @@ Quick example
         sizes=[50, 100, 200, 400, 600, 800],
         n_repeats=50,
         tests=['ks', 'chi2', 'rmse'],
-        stability_method='kneedle',  # Recommended for RMSE
+        stability_method='kneedle',  # Detect a bend in the RMSE curve
         smooth=True,                 # Smooth curves before detection
         sampling='random',
         fit_kwargs={'floc': 0},
@@ -274,9 +289,10 @@ Quick example
         plot_type='series'
     )
 
-    # Access recommended size
-    recommended_n = ds.attrs['recommended_size']
-    print(f"Recommended sample size: {recommended_n}")
+    # Inspect the primary stability result and its fallback state
+    detected_n = ds.attrs['recommended_size']
+    primary_metric = ds.attrs['primary_metric']
+    print(f"Primary result: {primary_metric} at n = {detected_n}")
     
     # Check all stability points
     print(ds.attrs['stability_points'])
@@ -286,13 +302,14 @@ Interpretation tips
 
 - Look at medians/boxplots of parameters across `sizes` — convergence indicates
   stable estimation.
-- Check `ks_pvalue` / `chi2_pvalue` behavior: rising p-values toward larger sizes
-  suggest better fit at those sizes, but beware of the large-sample-size effect
-  where p-values can become unreliable.
-- **RMSE is the most reliable indicator** for stability: it shows smooth, monotonic
-  decrease and clear convergence. Always include RMSE in your tests.
-- Use `recommended_size` (based on primary metric, typically RMSE) as the
-  recommended minimum sample size for robust parameter estimation.
+- Check `ks_pvalue` / `chi2_pvalue` behavior together with the test statistics.
+  Larger samples can detect smaller departures from the candidate model, so a
+  decreasing p-value does not by itself measure practical importance.
+- Use RMSE as the primary stability signal. In the empirical analyses that
+  motivated MagicA, it produced a clearer stability point than the p-value
+  curves; still inspect its sensitivity to the configured run.
+- Interpret `recommended_size` as a detector-dependent result within the tested
+  grid. If `primary_metric` is `max_size`, no stability point was detected.
 - The generated figure shows:
   - Parameter convergence across sample sizes
   - Goodness-of-fit evolution (KS, Chi-square p-values, RMSE)
@@ -310,19 +327,19 @@ When analyzing your results, compare how different metrics stabilize:
 
     stability = ds.attrs['stability_points']
     
-    # RMSE typically stabilizes earliest and most reliably
+    # Inspect the RMSE result produced by the selected detector
     rmse_stable = stability['rmse']['size']
     rmse_method = stability['rmse']['method']
     
-    # P-values may stabilize later or show erratic behavior
+    # Inspect the KS p-value result separately
     ks_stable = stability['ks_pvalue']['size']
     
     print(f"RMSE stable at n = {rmse_stable} (method: {rmse_method})")
     print(f"KS p-value stable at n = {ks_stable}")
     
-    # Use RMSE-based recommendation for production
-    recommended = ds.attrs['recommended_size']
-    print(f"\n⭐ Recommended sample size: {recommended}")
+    primary_size = ds.attrs['recommended_size']
+    primary_metric = ds.attrs['primary_metric']
+    print(f"\nPrimary result: {primary_metric} at n = {primary_size}")
 
 Further reading
 ---------------
@@ -339,20 +356,10 @@ effect in wind-speed goodness-of-fit through temporal segmentation and
 Monte-Carlo simulation*. Energy Conversion and Management: X, 31, 102163.
 `doi:10.1016/j.ecmx.2026.102163 <https://doi.org/10.1016/j.ecmx.2026.102163>`_.
 
-The article's abstract describes repeated subsampling, distribution fitting,
-KS/chi-square evaluation, RMSE stabilization, and temporal segmentation.
-MagicA provides subsampling and stability-analysis options, but its ``disjoint``
-strategy shuffles indices; it does not implement temporal segmentation.
-Segment time-indexed data explicitly before constructing an adjuster when that
-is part of the analysis. The software options ``cv``, ``kneedle``, ``plateau``
-and ``aggregate`` are described here as implementation features, not as an
-assertion that all are prescribed by the article.
-
-In the current implementation RMSE is computed between the empirical CDF
-(``i / n`` at sorted observations) and the fitted CDF. Stability does not require
-a goodness-of-fit test to pass. ``recommended_size`` prioritizes detected RMSE,
-KS p-value, chi-square p-value, then the first parameter; if none is detected,
-it falls back to the largest tested size with ``primary_metric='max_size'``.
-This fallback must not be interpreted as detected stability.
-
-Bibliographic metadata and abstract: `DOAJ metadata and abstract (JSON) <https://doaj.org/api/articles/5ab9d12e4648474bb91e934288d083c9>`_.
+The study uses MagicA to address large-sample-size effects in wind-speed
+goodness-of-fit through repeated subsampling, distribution fitting, statistical
+tests, RMSE stabilization, and temporal segmentation. It is a published
+application of the package's Monte Carlo workflow and serves as a methodological
+reference for this functionality. Its empirical results support using RMSE as
+the primary stability signal in this workflow because it yielded a clearer
+stabilization point than the evaluated p-value curves.
