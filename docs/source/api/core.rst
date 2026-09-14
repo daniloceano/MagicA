@@ -4,9 +4,8 @@ Core Module
 The core module contains the primary classes for statistical data processing and distribution fitting.
 
 .. automodule:: magica.core
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-members:
+   :no-special-members:
 
 DataProcessor
 -------------
@@ -37,7 +36,7 @@ DataProcessor provides the `get_auto_fitter()` method to create an AutoFitter in
     
     # Find best distribution
     best = auto_fitter.fit_best_distribution()
-    print(f"Best distribution: {best['distribution']}")
+    print(f"Best distribution: {best.name}")
 
 For complete AutoFitter documentation, see :doc:`auto_fitter`.
 
@@ -61,7 +60,8 @@ DataProcessor also provides the `get_extremes_analyzer()` method to create an Ex
     extremes = processor.get_extremes_analyzer(time_unit='years')
     
     # Fit GEV distribution and calculate return values
-    extremes.fit_distribution('genextreme')
+    annual_max, annual_times = extremes.extract_block_maxima('YE')
+    eva_fit = extremes.fit_block_maxima(annual_max, annual_times)
     rv_100 = extremes.return_value(100)  # 100-year return value
     print(f"100-year return value: {rv_100:.2f}")
 
@@ -80,7 +80,8 @@ The `MagicAdjuster` class is the central component for statistical distribution 
 Monte Carlo Fitting
 ~~~~~~~~~~~~~~~~~~~
 
-The `monte_carlo_fit` method performs stability analysis to determine minimum sample sizes for reliable parameter estimation.
+The `monte_carlo_fit` method examines how fitted parameters and diagnostics vary
+with sample size and reports stability points within the tested grid.
 
 .. note::
    For complete documentation including all parameters, stability detection methods, and best practices, see :doc:`monte_carlo`.
@@ -90,30 +91,30 @@ The `monte_carlo_fit` method performs stability analysis to determine minimum sa
 .. code-block:: python
 
     import numpy as np
-    from magica.core import MagicAdjuster
+    import magica as ma
     
     # Generate sample data
     data = np.random.weibull(2, 1000)
     
     # Create adjuster and fit distribution
-    adjuster = MagicAdjuster(data)
+    processor = ma.read_data(data)
+    adjuster = processor._get_adjuster()
     adjuster.fit_distribution('weibull_min')
     
     # Run Monte Carlo stability analysis
     results = adjuster.monte_carlo_fit(
         sizes=[100, 200, 500, 1000],
         n_repeats=30,
-        tests=['ks', 'chi2', 'rmse'],  # Always include RMSE!
+        tests=['ks', 'chi2', 'rmse'],  # Compare tests with a CDF-distance metric
         sampling='random',
         seed=42,
         fig_output_path='stability.png'
     )
     
-    # Check RMSE stability (most reliable indicator)
+    # Inspect the RMSE stability point detected on this grid
     rmse_size = results.attrs['stability_points']['rmse']['size']
-    print(f"Recommended minimum sample size: {rmse_size}")
+    print(f"Detected RMSE stability point: {rmse_size}")
 
-**Return Value:**
 **Return Value:**
 
 xarray.Dataset with:
@@ -136,7 +137,10 @@ xarray.Dataset with:
   - `figure_path`: Path to saved figure (if generated)
 
 .. tip::
-   **Always include 'rmse' in your tests** - it provides the most reliable stability detection because it shows smooth, monotonic convergence unlike p-values which can be erratic.
+   Include ``'rmse'`` when you want to track CDF distance alongside test
+   statistics and p-values. Its curve may be easier to interpret in some data
+   sets, but monotonic convergence is not guaranteed; compare the metrics and
+   inspect variability across repeats.
 
 For complete parameter documentation, stability methods, and best practices, see :doc:`monte_carlo`.
 
@@ -161,11 +165,11 @@ Utility Methods
 
 The class supports multiple binning strategies for histogram-based tests:
 
-- `_calculate_sturges_bins()`: Sturges' rule (log-based)
-- `_calculate_rice_bins()`: Rice rule (cube root)
-- `_calculate_freedman_diaconis_bins()`: Freedman-Diaconis rule (IQR-based)
-- `_calculate_scott_bins()`: Scott's rule (standard deviation-based)
-- `_calculate_doane_bins()`: Doane's rule (skewness-adjusted)
+- `get_bin_number_sturges()`: Sturges' rule (log-based)
+- `get_bin_number_rice()`: Rice rule (cube root)
+- `get_bin_number_freedman_diaconis()`: Freedman-Diaconis rule (IQR-based)
+- `get_bin_number_scott()`: Scott's rule (standard deviation-based)
+- `get_bin_number_doane()`: Doane's rule (skewness-adjusted)
 
 **Subsampling:**
 
@@ -177,3 +181,13 @@ Sampling strategies
 For a didactic, longer discussion of sampling strategies (`random`, `bootstrap`,
 and `disjoint`) and practical advice on when to use each, see the Monte Carlo
 tutorial: :doc:`/tutorials/monte_carlo`.
+
+FitResult
+---------
+
+.. autoclass:: magica.core.FitResult
+   :members:
+   :exclude-members: distribution, name, params, data
+
+Fitting returns this immutable result. PDF/CDF/PPF and goodness-of-fit methods
+operate on the result; Monte Carlo analysis remains on ``MagicAdjuster``.

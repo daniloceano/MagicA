@@ -15,7 +15,11 @@ AutoFitter automatically:
 - Provides comprehensive comparison tables
 
 .. important::
-   **Best Practice**: Always use **RMSE** as the primary selection criterion. RMSE is robust across all sample sizes and avoids the "large sample size effect" that makes p-values unreliable with large datasets (>10,000 samples).
+   MagicA recommends RMSE as the primary criterion. This recommendation is
+   empirical: in the tests that motivated the package, RMSE produced a clearer
+   stability point than the p-value curves. AIC and BIC are useful complementary
+   likelihood criteria when their values are finite, but their stability was not
+   evaluated in this workflow.
 
 Class Reference
 ---------------
@@ -40,20 +44,22 @@ Basic Usage
     data = np.random.weibull(2, 1000) * 8 + 2
     processor = ma.read_data(data)
     
-    # Create AutoFitter with RMSE criterion (recommended)
+    # Use CDF RMSE as the initial ranking criterion
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     
     # Find best distribution
     best_result = auto_fitter.fit_best_distribution()
     
-    print(f"Best distribution: {best_result['distribution']}")
-    print(f"RMSE: {best_result['rmse']:.6f}")
-    print(f"Parameters: {best_result['parameters']}")
+    print(f"Best distribution: {best_result.name}")
+    print(f"RMSE: {best_result.goodness_of_fit('rmse'):.6f}")
+    print(f"Parameters: {best_result.params}")
 
 Testing All Distributions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
+
+    from magica.core import AutoFitter
 
     # Get all available distributions
     all_dists = AutoFitter.get_all_available_distributions()
@@ -66,7 +72,7 @@ Testing All Distributions
     )
     
     best = auto_fitter.fit_best_distribution()
-    print(f"Best from all 113+: {best['distribution']}")
+    print(f"Best from all 113+: {best.name}")
 
 Custom Distribution List
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -109,34 +115,36 @@ Get a comprehensive comparison of all tested distributions:
     # Filter successful fits
     successful = {d: r for d, r in comparison.items() if r['success']}
     
-    # For synthetic data, optionally filter by p-value
-    good_fits = {d: r for d, r in successful.items() 
-                 if r['ks_pvalue'] > 0.05}
-    
-    # Display top 5
-    for i, (dist, result) in enumerate(list(good_fits.items())[:5], 1):
-        print(f"{i}. {dist}: RMSE={result['rmse']:.6f}")
+    # Display the first five entries in the RMSE ranking with KS diagnostics
+    for i, (dist, result) in enumerate(list(successful.items())[:5], 1):
+        print(
+            f"{i}. {dist}: RMSE={result['rmse']:.6f}, "
+            f"KS p-value={result['ks_pvalue']:.4f}"
+        )
 
 Using the Best Distribution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Once you've found the best distribution, you can use it like a regular MagicAdjuster:
+Once you've found the best distribution, you can use it through the returned ``FitResult``:
 
 .. code-block:: python
 
     # Get the adjuster for best distribution
-    best_adjuster = auto_fitter.get_best_adjuster()
+    best_fit = auto_fitter.fit_best_distribution()
     
     # Calculate statistics
-    mean = best_adjuster.stats(moments='m')
-    p95 = best_adjuster.ppf(0.95)  # 95th percentile
+    mean = best_fit.stats(moments='m')
+    p95 = best_fit.ppf(0.95)  # 95th percentile
     
     # Perform goodness-of-fit tests
-    ks_result = best_adjuster.goodness_of_fit('ks')
-    rmse_result = best_adjuster.goodness_of_fit('rmse')
+    ks_result = best_fit.goodness_of_fit('ks')
+    rmse_result = best_fit.goodness_of_fit('rmse')
     
-    # Monte Carlo stability analysis
-    mc_results = best_adjuster.monte_carlo_fit(
+    # Monte Carlo requires a fitted MagicAdjuster
+    from magica.core import MagicAdjuster
+    adjuster = MagicAdjuster(processor)
+    adjuster.fit_distribution(best_fit.name)
+    mc_results = adjuster.monte_carlo_fit(
         tests=['ks', 'chi2', 'rmse'],
         n_repeats=100,
         fig_output_path='stability.png'
@@ -150,59 +158,70 @@ Available Criteria
 
 The ``criterion`` parameter accepts:
 
-- **'rmse'** (recommended): Root Mean Square Error - robust for all sample sizes
+- **'rmse'**: Root Mean Square Error between the fitted and empirical CDFs
 - **'aic'**: Akaike Information Criterion - balances fit and complexity
 - **'bic'**: Bayesian Information Criterion - penalizes complexity more than AIC
-- **'ks_pvalue'**: Kolmogorov-Smirnov p-value - statistical significance
-- **'chi2_pvalue'**: Chi-square p-value - histogram-based test
+- **'ks_pvalue'**: Kolmogorov-Smirnov p-value
+- **'chi2_pvalue'**: Histogram-based chi-square p-value
+
+All continuous distributions exposed by MagicA provide the SciPy ``logpdf``
+interface used for AIC and BIC, but fitting or likelihood evaluation can still
+fail or return a non-finite value for a particular dataset. Check
+``numpy.isfinite`` before comparing these criteria across candidates.
 
 When to Use Each
 ~~~~~~~~~~~~~~~~
 
 **Use RMSE when:**
 
-- ✅ Working with real-world data
-- ✅ Sample size is large (>10,000)
-- ✅ You want consistent, reliable results
-- ✅ Practical fit quality matters
+- You want the primary criterion recommended by MagicA's empirical workflow
+- You want a direct summary of the distance between fitted and empirical CDFs
+- You will inspect p-values, plots, and tail behavior as complementary evidence
 
 **Use p-values when:**
 
-- ⚠️ Working with synthetic/controlled data
-- ⚠️ Sample size is moderate (<1,000)
-- ⚠️ Statistical significance is required
-- ⚠️ Educational/demonstration purposes
+- You want a goodness-of-fit diagnostic rather than a model ranking alone
+- The test assumptions and the effect of estimating parameters are considered
+- You interpret the values together with effect-size and graphical diagnostics
 
 **Use AIC/BIC when:**
 
-- 📊 Comparing model complexity
-- 📊 Theoretical model selection
-- 📊 Need to balance fit vs. parameters
+- You want likelihood-based comparisons with a penalty for fitted parameters
+- Every candidate being compared has a finite likelihood criterion on the same data
+- You do not interpret them as Monte Carlo stability measures: the current
+  ``monte_carlo_fit()`` workflow does not calculate AIC or BIC
 
 .. warning::
-   **Large Sample Size Effect**: With large datasets (>10,000 observations), goodness-of-fit tests (KS, Chi-square) tend to reject even excellent fits. Their p-values become unreliable. **Always use RMSE for large datasets.**
-   
-   See the MagicAdjuster tutorial section on "Large Sample Size Effect" for detailed explanation.
+   As sample size grows, goodness-of-fit tests can detect increasingly small
+   departures from a candidate distribution. A small p-value may therefore
+   coexist with a fit that is adequate for a particular practical purpose. No
+   universal sample-size cutoff applies: consider the magnitude and location of
+   the discrepancy, especially in the tails, alongside RMSE, AIC/BIC, and plots.
+
+   When parameters are estimated from the same observations used by a test, its
+   nominal p-value may also require calibration. Comparing many candidates adds
+   a multiple-comparison and selection effect, so do not rank models by p-value
+   alone.
 
 Result Dictionary
 -----------------
 
-Each distribution's results contain:
+``get_comparison_table()`` and ``fit_all_distributions()`` return scalar
+metric dictionaries per candidate (not ``FitResult`` objects). Successful entries contain:
 
 .. code-block:: python
 
     {
         'distribution': str,      # Distribution name
         'success': bool,          # Whether fitting succeeded
-        'parameters': tuple,      # Fitted parameters
+        'params': tuple,      # Fitted parameters
         'rmse': float,           # Root mean square error
         'aic': float,            # Akaike Information Criterion
         'bic': float,            # Bayesian Information Criterion
         'ks_statistic': float,   # KS test statistic
         'ks_pvalue': float,      # KS test p-value
         'chi2_statistic': float, # Chi-square statistic
-        'chi2_pvalue': float,    # Chi-square p-value
-        'adjuster': MagicAdjuster  # Fitted adjuster instance
+        'chi2_pvalue': float     # Chi-square p-value
     }
 
 Default Distributions
@@ -213,22 +232,9 @@ The default candidate list includes 16 stable, commonly-used distributions:
 .. code-block:: python
 
     default_distributions = [
-        'norm',           # Normal
-        'lognorm',        # Log-normal
-        'expon',          # Exponential
-        'weibull_min',    # Weibull (minimum)
-        'gamma',          # Gamma
-        'beta',           # Beta
-        'chi2',           # Chi-square
-        'rayleigh',       # Rayleigh
-        'uniform',        # Uniform
-        'logistic',       # Logistic
-        'gumbel_r',       # Gumbel (right)
-        'exponweib',      # Exponentiated Weibull
-        'genextreme',     # Generalized Extreme Value
-        'pareto',         # Pareto
-        'maxwell',        # Maxwell
-        'rice'            # Rice
+        'weibull_min', 'lognorm', 'gamma', 'norm', 'expon', 'rayleigh',
+        'chi2', 'beta', 'uniform', 'logistic', 'gumbel_r', 'pareto',
+        'invgamma', 'maxwell', 'triang', 'laplace',
     ]
 
 To test all 113+ available distributions, use:
@@ -256,10 +262,10 @@ Finding Best Distribution
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     best = auto_fitter.fit_best_distribution()
     
-    print(f"Best distribution: {best['distribution']}")
-    print(f"RMSE: {best['rmse']:.6f}")
-    print(f"AIC: {best['aic']:.2f}")
-    print(f"KS p-value: {best['ks_pvalue']:.6f}")
+    print(f"Best distribution: {best.name}")
+    print(f"RMSE: {best.goodness_of_fit('rmse'):.6f}")
+    print(f"AIC: {best.goodness_of_fit('aic'):.2f}")
+    print(f"KS p-value: {best.goodness_of_fit('ks')['p_value']:.6f}")
 
 Comparing Multiple Criteria
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -272,14 +278,14 @@ Comparing Multiple Criteria
     for criterion in criteria:
         fitter = processor.get_auto_fitter(criterion=criterion)
         best = fitter.fit_best_distribution()
-        print(f"{criterion.upper()}: {best['distribution']}")
+        print(f"{criterion.upper()}: {best.name}")
 
-Filtering by P-value (Synthetic Data Only)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Inspecting P-values
+~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    # For synthetic data, you can filter by p-value
+    # Inspect p-values alongside the RMSE ranking
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     auto_fitter.fit_all_distributions()
     
@@ -288,23 +294,28 @@ Filtering by P-value (Synthetic Data Only)
     # Get successful fits
     successful = [(d, r) for d, r in comparison.items() if r['success']]
     
-    # Filter by p-value > 0.05 (good statistical fit)
-    good_fits = [(d, r) for d, r in successful if r['ks_pvalue'] > 0.05]
+    above_threshold = [
+        (d, r) for d, r in successful if r['ks_pvalue'] > 0.05
+    ]
     
-    print(f"Distributions with p > 0.05: {len(good_fits)}")
+    print(f"Distributions with p > 0.05: {len(above_threshold)}")
     print(f"Top 3 by RMSE (p > 0.05):")
-    for i, (dist, result) in enumerate(good_fits[:3], 1):
+    for i, (dist, result) in enumerate(above_threshold[:3], 1):
         print(f"  {i}. {dist}: RMSE={result['rmse']:.6f}, p={result['ks_pvalue']:.4f}")
+
+The threshold is illustrative; exceeding it does not establish that a model is
+correct or make the p-value a model-selection score. Calibration may be needed
+when parameters were estimated from the same data.
 
 Best Practices
 --------------
 
-1. **Always use RMSE** as the primary criterion for real-world data
+1. **Use RMSE as MagicA's empirically recommended primary criterion**
 2. **Start with default distributions** (faster), then try comprehensive if needed
 3. **Create custom lists** for domain-specific applications (e.g., wind, rainfall)
-4. **Filter by p-value only for synthetic data** with moderate sample sizes
-5. **Check multiple criteria** to verify consistency in distribution selection
-6. **Use the best adjuster** for further analysis (Monte Carlo, goodness-of-fit)
+4. **Treat p-values as diagnostics**, with attention to calibration and multiple comparisons
+5. **Check complementary criteria and plots**, including the region or tail that matters
+6. **Use FitResult** for distribution evaluation and a fitted MagicAdjuster for Monte Carlo
 
 See Also
 --------

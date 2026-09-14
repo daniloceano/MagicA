@@ -1,230 +1,109 @@
 Tutorials
 =========
 
-This section contains comprehensive tutorials and examples for using MagicA for statistical distribution fitting and Monte Carlo stability analysis.
+Choose a tutorial according to the task you want to complete. Each notebook
+includes executable examples, figures, and saved outputs.
 
 .. tip::
-   **New to MagicA?** Start with the :doc:`/quickstart` guide, then explore the interactive Jupyter notebooks below.
+   **New to MagicA?** Begin with :doc:`/installation` and :doc:`/quickstart`.
+
+.. _which-tutorial-should-i-use:
 
 Interactive Jupyter Notebooks
 -----------------------------
 
-MagicAdjuster Tutorial
-~~~~~~~~~~~~~~~~~~~~~~
+.. _magicadjuster-tutorial:
+.. _autofitter-tutorial:
 
-**Comprehensive guide to single distribution fitting with Monte Carlo CPS (Coefficient/P-value/Sample size) methods.**
+**Distribution fitting:** fit a chosen distribution with MagicAdjuster, or
+compare candidate distributions with AutoFitter.
 
-This tutorial covers:
+.. _extreme-value-analysis-tutorial:
 
-- Distribution fitting and parameter estimation
-- Goodness-of-fit testing (KS, Chi-square, RMSE)
-- Different binning strategies for histogram-based tests
-- **Monte Carlo stability analysis** for determining minimum sample sizes
-- **Large Sample Size Effect** - why p-values become unreliable with large datasets (>10,000 samples)
-- **RMSE as the most reliable stability indicator**
-- Comparing different sampling strategies (random, bootstrap, disjoint)
-- CPS (Coefficient/P-value/Sample size) method from Lin et al. (2011)
-- Real-world example with INMET weather station data
-
-.. important::
-   This tutorial demonstrates why **RMSE is the preferred metric** for assessing fit quality and stability, especially with large datasets where p-values can be misleading.
+**Extreme value analysis:** start with block maxima and peaks over threshold,
+then continue to the directional wind example.
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
-   magic_adjuster_tutorial
+   distribution_fitting
+   extreme_value_analysis
 
-**Key Learning Outcomes:**
+.. _api-usage-tutorial:
+.. _usage-guides:
 
-- Master Monte Carlo stability analysis
-- Understand when p-values are reliable vs. unreliable
-- Learn to use RMSE as primary fit quality indicator
-- Determine optimal sample sizes for your data
+Quick Start
+-----------
 
-AutoFitter Tutorial
-~~~~~~~~~~~~~~~~~~~
+.. _magica-api-usage:
+.. _basic-example-weibull-fit-and-goodness-of-fit-evaluation:
+.. _monte-carlo-stability-analysis:
+.. _advanced-monte-carlo-usage:
+.. _api-reference:
+.. _read-data-data:
+.. _dataprocessor-fit-distribution-kwargs:
+.. _fitresult-params-and-fitresult-info:
+.. _fitresult-goodness-of-fit-method-kwargs:
+.. _magicadjuster-monte-carlo-fit:
+.. _dataprocessor-get-basic-stats:
+.. _working-with-xarray-results:
+.. _goodness-of-fit-methods:
 
-**Learn how to automatically find the best distribution from 113+ scipy.stats options.**
+For basic fitting, goodness-of-fit evaluation, Monte Carlo calls, and working
+with results, see :doc:`/quickstart`.
 
-This tutorial covers:
+.. _monte-carlo-stability-tutorial:
 
-- Automatic distribution testing and selection
-- **RMSE-based selection** (recommended for all data types)
-- Testing default curated list (16 distributions) vs. comprehensive set (113+)
-- Creating domain-specific distribution lists (e.g., wind, rainfall)
-- Comparison tables and ranking by different criteria
-- **Filtering by p-value for synthetic data** (with warnings for real-world use)
-- Understanding when each selection criterion is appropriate
-- Using the best-fitted distribution for further analysis
+Methodology
+-----------
 
-.. note::
-   This tutorial emphasizes **RMSE as the primary criterion** for distribution selection, with clear guidance on when p-value filtering is appropriate vs. problematic.
+.. _why-monte-carlo-stability:
+.. _methodology-what-we-do:
+.. _inputs-and-options:
+.. _stability-detection-methods:
+.. _cv-method-coefficient-of-variation:
+.. _kneedle-method-elbow-detection:
+.. _plateau-method-relative-gain-heuristic:
+.. _method-selection-guide:
+.. _sampling-strategies:
+.. _reproducibility-and-seed:
+.. _practical-guidance:
+.. _outputs:
+.. _quick-example:
+.. _interpretation-tips:
+.. _method-comparison:
+.. _further-reading:
+.. _scientific-context:
 
-.. toctree::
-   :maxdepth: 1
-
-   auto_fitter_tutorial
-
-**Key Learning Outcomes:**
-
-- Automate distribution selection with confidence
-- Choose appropriate selection criteria for your data
-- Understand trade-offs between speed (default list) and thoroughness (comprehensive)
-- Apply best practices for real-world vs. synthetic data
-
-Extreme Value Analysis Tutorial
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Comprehensive guide to analyzing extreme events with return period calculations and extreme value distributions.**
-
-This tutorial covers:
-
-- Creating ExtremesAnalyzer from time series data
-- **Block Maxima approach** - GEV (Generalized Extreme Value) distribution
-- **Peaks Over Threshold (POT)** - GPD (Generalized Pareto Distribution)
-- Return period and return value calculations
-- Declustering techniques for independent extreme events
-- Monthly and seasonal block maxima extraction
-- Return level plots and visualization
-- Comparing GEV vs. GPD approaches
-- Flexible time series handling (pandas, datetime64, numeric arrays)
-- Best practices for extreme value analysis
-
-.. important::
-   This tutorial demonstrates real-world applications in **wind engineering, climate studies, and structural design** using both classical (Block Maxima) and modern (POT) extreme value methods.
-
-.. toctree::
-   :maxdepth: 1
-
-   extremes_tutorial
-
-**Key Learning Outcomes:**
-
-- Master both Block Maxima (GEV) and POT (GPD) methods
-- Calculate design values for infrastructure (10-year, 50-year, 100-year return periods)
-- Understand when to use each extreme value approach
-- Extract and analyze seasonal patterns in extremes
-- Apply proper declustering for POT analysis
-
-API Usage Tutorial
-------------------
-
-Quick reference guide for common MagicA operations and API patterns.
-
-.. include:: api_usage.md
-   :parser: myst_parser.sphinx_
-
-Monte Carlo Stability Tutorial
-------------------------------
-
-Detailed explanation of Monte Carlo methods for stability analysis and sample size determination.
-
-.. include:: monte_carlo.rst
-   :parser: restructuredtext
-
-Which Tutorial Should I Use?
------------------------------
-
-**Choose MagicAdjuster Tutorial if:**
-
-- ✓ You know which distribution to fit (e.g., Weibull for wind speed)
-- ✓ You want to perform detailed stability analysis
-- ✓ You need to understand parameter uncertainty
-- ✓ You're working with large datasets (>10,000 samples)
-- ✓ You want to learn about the large sample size effect
-
-**Choose AutoFitter Tutorial if:**
-
-- ✓ You're unsure which distribution fits your data best
-- ✓ You want to compare multiple distributions quickly
-- ✓ You need a comprehensive distribution search
-- ✓ You're exploring a new dataset
-- ✓ You want to validate your distribution choice
-
-**Choose Extreme Value Analysis Tutorial if:**
-
-- ✓ You need to calculate return periods and design values
-- ✓ You're working with extreme events (storms, floods, heat waves)
-- ✓ You need 10-year, 50-year, or 100-year design values
-- ✓ You want to compare Block Maxima (GEV) vs. POT (GPD) approaches
-- ✓ You're doing wind/structural engineering or climate risk assessment
-
-**All tutorials emphasize:**
-
-- ⭐ **RMSE as the most reliable metric** for fit quality
-- 📊 When p-values are trustworthy vs. misleading
-- 🎯 Best practices for real-world data analysis
+For the motivation, sampling strategies, and stability-detection options,
+see :doc:`monte_carlo`. The guide distinguishes the scientific context from
+MagicA's implementation options.
 
 Legacy Examples
 ---------------
 
-Weibull Fit Example
-~~~~~~~~~~~~~~~~~~~
+.. _weibull-fit-example:
+.. _magic-adjuster-example:
 
-.. note::
-   The Jupyter notebook `MagicA_Weibull_Fit_Example.ipynb` can be found in this directory.
-   You can download and run it locally to follow along with the examples.
-   
-   **Note:** This is a legacy example. We recommend using the updated MagicAdjuster tutorial instead.
-
-Magic Adjuster Example
-~~~~~~~~~~~~~~~~~~~~~~
-
-.. note::
-   The Python script `example_magic_adjuster.py` contains example usage of the MagicAdjuster class.
-   You can find it in this directory and run it as a standalone script.
-   
-   **Note:** This is a legacy example. We recommend using the updated tutorials instead.
+The historical files ``MagicA_Weibull_Fit_Example.ipynb`` and
+``example_magic_adjuster.py`` are not included in the current repository.
+Use :doc:`magic_adjuster_tutorial` for an executable example.
 
 Downloadable Files
 ------------------
 
-Download the following files to run locally:
+Download the notebooks to run the tutorials locally:
 
-**Main Tutorials:**
+- :download:`MagicAdjuster tutorial <magic_adjuster_tutorial.ipynb>`
+- :download:`AutoFitter tutorial <auto_fitter_tutorial.ipynb>`
+- :download:`Extreme Value Analysis tutorial <extremes_tutorial.ipynb>`
+- :download:`Directional Extremes tutorial <directional_extremes_tutorial.ipynb>`
 
-* :download:`magic_adjuster_tutorial.ipynb <magic_adjuster_tutorial.ipynb>` - Complete MagicAdjuster tutorial with Monte Carlo CPS methods
-* :download:`auto_fitter_tutorial.ipynb <auto_fitter_tutorial.ipynb>` - Comprehensive AutoFitter tutorial with RMSE emphasis
-* :download:`extremes_tutorial.ipynb <extremes_tutorial.ipynb>` - Extreme value analysis with GEV and GPD distributions
-
-**Legacy Materials:**
-
-* :download:`MagicA_Weibull_Fit_Example.ipynb <MagicA_Weibull_Fit_Example.ipynb>` - Legacy Weibull fitting examples
-* :download:`example_magic_adjuster.py <example_magic_adjuster.py>` - Python script with MagicAdjuster examples
-* :download:`api_usage.md <api_usage.md>` - API usage guide in Markdown format
-
-Best Practices Summary
-----------------------
-
-Based on the tutorials, here are the key best practices:
-
-**Distribution Selection:**
-
-1. **Use RMSE as primary criterion** for real-world data
-2. Start with AutoFitter's default list for quick screening
-3. Use comprehensive search when you need the absolute best fit
-4. Create domain-specific lists for faster, targeted analysis
-
-**Monte Carlo Analysis:**
-
-1. **Always include 'rmse' in tests** - most reliable stability indicator
-2. Use 100+ repeats for robust stability detection
-3. Generate summary figures with `fig_output_path` for visual inspection
-4. Check RMSE stability first, then validate with other metrics
-
-**Large Sample Size Effect:**
-
-1. **Avoid p-value-only selection** with large datasets (>10,000 samples)
-2. Use RMSE for datasets of any size - it's always reliable
-3. Understand that p-values can reject even excellent fits with large N
-4. See MagicAdjuster tutorial for detailed examples
+.. _best-practices-summary:
 
 Next Steps
 ----------
 
-After completing the tutorials:
-
-- Apply MagicA to your own data
-- Explore the :doc:`/api/core`, :doc:`/api/auto_fitter`, and :doc:`/api/extremes` documentation
-- Read about :doc:`/api/monte_carlo` for advanced stability analysis
-- Check :doc:`/contributing` to contribute to the project
+Consult :doc:`/api/core`, :doc:`/api/auto_fitter`, and :doc:`/api/extremes`
+for method signatures and return types. For Monte Carlo options, see
+:doc:`/api/monte_carlo`. Contribution information is in :doc:`/contributing`.

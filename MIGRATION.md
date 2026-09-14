@@ -45,7 +45,7 @@ no longer raises `IndexError`. Pure POT and event-wise behavior are unchanged.
 | PDF/CDF/PPF | Called on `DataProcessor` or `MagicAdjuster` | Called on `FitResult` |
 | `get_fitted_params()` | Method on `DataProcessor` | `fit_result.params` |
 | `get_distribution_info()` | Method on `DataProcessor` | `fit_result.info` |
-| `get_best_adjuster()` | Returned `MagicAdjuster` | Returns `FitResult` via `fit_best_distribution()` |
+| `get_best_adjuster()` | Returned `MagicAdjuster` | Deprecated; still returns `MagicAdjuster`. Prefer `FitResult` from `fit_best_distribution()` |
 | PoT return levels | Numerically wrong (λ ignored) | Correct formula with λ |
 | EVA fit target | Full time series | Extracted extreme sample only |
 | EVA families | Any distribution | Restricted: BM (genextreme, gumbel_r), PoT (genpareto, expon) |
@@ -132,8 +132,10 @@ results = adjuster.monte_carlo_fit(tests=['ks', 'rmse'])
 ### After
 
 ```python
+from magica.core import MagicAdjuster
+
 fit      = data.fit('weibull', floc=0)         # FitResult
-adjuster = data._get_adjuster()                 # MagicAdjuster (stateless)
+adjuster = MagicAdjuster(data)                 # MagicAdjuster (stores the distribution used by MC)
 adjuster.fit_distribution('weibull', floc=0)    # sets internal distribution for MC
 results  = adjuster.monte_carlo_fit(tests=['ks', 'rmse'])
 ```
@@ -141,7 +143,7 @@ results  = adjuster.monte_carlo_fit(tests=['ks', 'rmse'])
 Or more concisely:
 
 ```python
-adjuster = data._get_adjuster()
+adjuster = MagicAdjuster(data)
 fit = adjuster.fit_distribution('weibull', floc=0)   # both gets FitResult and sets MC state
 results = adjuster.monte_carlo_fit(tests=['ks', 'rmse'])
 ```

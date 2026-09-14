@@ -53,7 +53,7 @@ bug documented in the previous TO-DO is resolved by construction).
 `FitResult.data` holds a **shared reference** to the underlying array — no copy
 is ever made for a fit result.
 
-See [MIGRATION.md](MIGRATION.md) for full before/after syntax.
+See [MIGRATION.md](https://github.com/daniloceano/MagicA/blob/main/MIGRATION.md) for full before/after syntax.
 
 #### (b) PoT return levels are numerically different (bug fix)
 

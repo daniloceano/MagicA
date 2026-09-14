@@ -54,7 +54,8 @@ Basic Usage with Pandas Series
     extremes = processor.get_extremes_analyzer(time_unit='years')
     
     # Fit GEV distribution (common for block maxima)
-    extremes.fit_distribution('genextreme')
+    annual_max, annual_times = extremes.extract_block_maxima('YE')
+    eva_fit = extremes.fit_block_maxima(annual_max, annual_times)
     
     # Calculate return values
     rv_50 = extremes.return_value(50)   # 50-year return value
@@ -81,7 +82,8 @@ Using Separate Time and Value Arrays
     extremes = processor.get_extremes_analyzer(times=times, time_unit='years')
     
     # Fit distribution and analyze
-    extremes.fit_distribution('gumbel_r')
+    annual_max, annual_times = extremes.extract_block_maxima('YE')
+    extremes.fit_block_maxima(annual_max, annual_times, distribution='gumbel_r')
     
     # Calculate return period for specific value
     rp = extremes.return_period(25.0)
@@ -153,28 +155,28 @@ Extract block maxima (or minima) for GEV analysis:
 .. code-block:: python
 
     # Extract annual maxima
-    annual_max, times = extremes.extract_block_maxima(block_size='A')
+    annual_max, annual_times = extremes.extract_block_maxima(block_size='YE')
     print(f"Extracted {len(annual_max)} annual maxima")
     
     # Extract monthly maxima
-    monthly_max, times = extremes.extract_block_maxima(block_size='M')
+    monthly_max, times = extremes.extract_block_maxima(block_size='ME')
     
     # Extract quarterly minima (for minimum extremes)
     quarterly_min, times = extremes.extract_block_maxima(
-        block_size='Q',
+        block_size='QE',
         method='min'
     )
     
     # Create new analyzer with block maxima
-    processor_annual = ma.read_data(pd.Series(annual_max, index=times))
+    processor_annual = ma.read_data(pd.Series(annual_max, index=annual_times))
     extremes_annual = processor_annual.get_extremes_analyzer()
     extremes_annual.fit_distribution('genextreme')
 
 **Block sizes** (pandas offset aliases):
 
-- ``'A'`` or ``'Y'``: Annual
-- ``'Q'``: Quarterly  
-- ``'M'``: Monthly
+- ``'YE'``: Annual
+- ``'QE'``: Quarterly
+- ``'ME'``: Monthly
 - ``'W'``: Weekly
 - ``'D'``: Daily
 
@@ -324,7 +326,7 @@ Complete Workflow: Annual Maxima Analysis
     extremes = processor.get_extremes_analyzer(time_unit='years')
     
     # Extract annual maxima
-    annual_max, max_times = extremes.extract_block_maxima(block_size='A')
+    annual_max, max_times = extremes.extract_block_maxima(block_size='YE')
     
     # Fit GEV to annual maxima
     processor_annual = ma.read_data(pd.Series(annual_max, index=max_times))
@@ -356,7 +358,7 @@ POT Analysis with GPD
     from scipy import stats
     
     # Load data
-    dates = pd.date_range('2000-01-01', '2023-12-31', freq='H')
+    dates = pd.date_range('2000-01-01', '2023-12-31', freq='h')
     wave_heights = np.random.weibull(2, len(dates)) * 3 + 0.5
     series = pd.Series(wave_heights, index=dates)
     
@@ -382,10 +384,10 @@ POT Analysis with GPD
     
     # Fit GPD to excesses
     processor_gpd = ma.read_data(excesses)
-    processor_gpd.fit_distribution('genpareto')
+    gpd_fit = processor_gpd.fit('genpareto')
     
     # Get GPD parameters
-    params = processor_gpd.get_fitted_params()
+    params = gpd_fit.params
     print(f"GPD parameters: shape={params[0]:.3f}, loc={params[1]:.3f}, scale={params[2]:.3f}")
 
 Summary Statistics
@@ -444,7 +446,7 @@ Provide times separately if your data isn't in pandas Series format:
     import magica as ma
     
     # Separate arrays
-    times = pd.date_range('2000-01-01', periods=1000, freq='H')
+    times = pd.date_range('2000-01-01', periods=1000, freq='h')
     values = np.array([...])  # your data
     
     # Provide times to extremes analyzer
@@ -720,10 +722,10 @@ Complete workflow using automated threshold selection:
         
         # Fit GPD distribution
         gpd_processor = ma.read_data(excesses)
-        gpd_processor.fit_distribution('genpareto')
+        gpd_fit = extremes.fit_pot(result)
         
         # Get parameters
-        params = gpd_processor.get_fitted_params()
+        params = gpd_fit.params
         shape, loc, scale = params
         
         print(f"GPD parameters: shape={shape:.3f}, scale={scale:.3f}")
@@ -742,7 +744,7 @@ Apply to each directional sector separately:
     import magica as ma
     
     # Generate directional data
-    wind_data = generate_directional_wind_data(n_years=10, freq='H')
+    wind_data = generate_directional_wind_data(n_years=10, freq='h')
     
     # Define sectors
     sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -751,7 +753,7 @@ Apply to each directional sector separately:
     for sector in sectors:
         # Filter by sector
         sector_mask = wind_data['sector_name'] == sector
-        sector_series = wind_data.loc[sector_mask, 'wind_speed']
+        sector_series = wind_data.loc[sector_mask].set_index('datetime')['wind_speed']
         
         # Analyze
         processor = ma.read_data(sector_series)
@@ -961,9 +963,9 @@ Consider parameter uncertainty in your return value estimates:
     # Bootstrap for confidence intervals
     from scipy import stats
     
-    # Fit distribution
-    extremes.fit_distribution('genextreme')
-    params = extremes.fitted_params
+    # Bootstrap the annual maxima sample, not the full time series
+    annual_max, annual_times = extremes.extract_block_maxima('YE')
+    eva_fit = extremes.fit_block_maxima(annual_max, annual_times)
     
     # Bootstrap resampling
     n_boot = 1000
@@ -971,15 +973,13 @@ Consider parameter uncertainty in your return value estimates:
     
     for _ in range(n_boot):
         # Resample with replacement
-        boot_sample = np.random.choice(extremes.data, size=len(extremes.data), replace=True)
+        boot_sample = np.random.choice(annual_max, size=len(annual_max), replace=True)
         
         # Fit and calculate return value
         boot_processor = ma.read_data(boot_sample)
-        boot_processor.fit_distribution('genextreme')
-        boot_extremes = ExtremesAnalyzer(boot_processor)
-        boot_extremes.fitted_params = boot_processor.get_fitted_params()
-        boot_extremes.distribution_name = 'genextreme'
-        rv_boot.append(boot_extremes.return_value(100))
+        boot_extremes = boot_processor.get_extremes_analyzer()
+        boot_fit = boot_extremes.fit_block_maxima(boot_sample)
+        rv_boot.append(boot_fit.return_value(100))
     
     # Calculate confidence intervals
     ci_lower = np.percentile(rv_boot, 2.5)
@@ -1002,3 +1002,22 @@ References
 - Coles, S. (2001). *An Introduction to Statistical Modeling of Extreme Values*. Springer.
 - Beirlant, J., et al. (2004). *Statistics of Extremes: Theory and Applications*. Wiley.
 - Gumbel, E.J. (1958). *Statistics of Extremes*. Columbia University Press.
+
+EVAFit and explicit fitting
+---------------------------
+
+.. autoclass:: magica.core.extremes_analyzer.EVAFit
+   :members:
+   :exclude-members: method, threshold, lambda_rate, blocks_per_year
+
+``fit_block_maxima`` accepts ``genextreme`` and ``gumbel_r``;
+``fit_pot`` accepts ``genpareto`` and ``expon``. The legacy
+``fit_distribution`` still accepts other families, but fits the analyzer's
+current data and uses the block-maxima return formula. It does not extract
+extremes or provide a POT rate correction automatically.
+
+For BM, return periods are measured in blocks; ``blocks_per_year`` is metadata
+and does not rescale the formula. Annual maxima therefore give years. For POT,
+the rate is ``n_independent / analyzer.time_span`` in the selected time unit.
+``return_level_table`` returns rows with ``period``, ``level``, ``ci_low`` and
+``ci_high``; the confidence limits are currently ``None``.

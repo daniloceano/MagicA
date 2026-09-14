@@ -6,19 +6,23 @@ MagicA (Magic Adjustment) is a Python package for statistical data adjustment wi
 Installation
 ------------
 
-Install MagicA using pip:
+Install this repository using pip:
 
 .. code-block:: bash
 
-    pip install magica
+    pip install "git+https://github.com/daniloceano/MagicA.git"
 
 Basic Usage
 -----------
 
+.. _qs-fitting:
+
 Distribution Fitting
 ~~~~~~~~~~~~~~~~~~~~
 
-Start by fitting a distribution to your data:
+Load an array-like sample (a list, NumPy array, or pandas Series/DataFrame),
+then fit a distribution. ``fit()`` returns an immutable ``FitResult``;
+``fit_distribution()`` is an alias with the same return type.
 
 .. code-block:: python
 
@@ -30,33 +34,42 @@ Start by fitting a distribution to your data:
     
     # Create processor and fit distribution
     processor = ma.read_data(data)
-    processor.fit_distribution('weibull_min')
+    fit = processor.fit('weibull_min')
     
     # Get fitted parameters
-    params = processor.get_fitted_params()
+    params = fit.params
     print(f"Fitted parameters: {params}")
+    print(fit.info)  # Distribution name, parameters, and sample size
+    print(processor.get_basic_stats())  # Descriptive statistics
+
+.. _qs-gof:
 
 Goodness-of-Fit Testing
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Evaluate how well your distribution fits the data:
+Evaluate how well your distribution fits the data. KS and chi-square return
+dictionaries; RMSE, AIC, and BIC return scalar values. MagicA computes RMSE
+between the empirical and fitted CDFs. See :doc:`api/core` for the full API.
 
 .. code-block:: python
 
     # Perform Kolmogorov-Smirnov test
-    ks_result = processor.goodness_of_fit('ks')
+    ks_result = fit.goodness_of_fit('ks')
     print(f"KS p-value: {ks_result['p_value']:.4f}")
     
     # Perform chi-square test
-    chi2_result = processor.goodness_of_fit('chi2')
+    chi2_result = fit.goodness_of_fit('chi2')
     print(f"Chi-square p-value: {chi2_result['p_value']:.4f}")
     
-    # Calculate RMSE (recommended)
-    rmse_result = processor.goodness_of_fit('rmse')
-    print(f"RMSE: {rmse_result['rmse']:.6f}")
+    # Calculate CDF RMSE
+    rmse_result = fit.goodness_of_fit('rmse')
+    print(f"RMSE: {rmse_result:.6f}")
 
 .. tip::
-   **RMSE is the most reliable metric** for assessing fit quality, especially with large datasets where p-values can be misleading due to the "large sample size effect".
+   MagicA recommends RMSE as the primary selection criterion. In the empirical
+   tests that motivated the package, its curve produced a clearer stability
+   point than the p-value curves. Use test results and plots as complementary
+   diagnostics, especially in the region of practical interest.
 
 Automatic Distribution Selection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -65,15 +78,15 @@ Use AutoFitter to automatically find the best distribution:
 
 .. code-block:: python
 
-    # Create AutoFitter with RMSE criterion (recommended)
+    # Use CDF RMSE as the initial ranking criterion
     auto_fitter = processor.get_auto_fitter(criterion='rmse')
     
     # Find best distribution
     best = auto_fitter.fit_best_distribution()
     
-    print(f"Best distribution: {best['distribution']}")
-    print(f"RMSE: {best['rmse']:.6f}")
-    print(f"AIC: {best['aic']:.2f}")
+    print(f"Best distribution: {best.name}")
+    print(f"RMSE: {best.goodness_of_fit('rmse'):.6f}")
+    print(f"AIC: {best.goodness_of_fit('aic'):.2f}")
 
 Testing Multiple Distributions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -119,7 +132,8 @@ Analyze extreme values and calculate return periods for time series data:
     extremes = processor.get_extremes_analyzer(time_unit='years')
     
     # Fit GEV distribution (common for extremes)
-    extremes.fit_distribution('genextreme')
+    annual_max, annual_times = extremes.extract_block_maxima('YE')
+    eva_fit = extremes.fit_block_maxima(annual_max, annual_times)
     
     # Calculate return values
     rv_50 = extremes.return_value(50)   # 50-year return value
@@ -139,20 +153,24 @@ Analyze extreme values and calculate return periods for time series data:
    - ``'gumbel_r'``: Gumbel distribution - common for environmental extremes
    - ``'weibull_max'``: Weibull maximum - for maximum extremes
 
+.. _qs-mc:
+
 Monte Carlo Stability Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Determine the minimum sample size needed for stable parameter estimation:
+Examine how parameter estimates and diagnostics vary with sample size:
 
 .. code-block:: python
 
-    # Fit a distribution first
-    processor.fit_distribution('weibull_min')
+    # Monte Carlo runs on MagicAdjuster, not DataProcessor or FitResult
+    from magica.core import MagicAdjuster
+    adjuster = MagicAdjuster(processor)
+    fit = adjuster.fit_distribution('weibull_min')
     
     # Run Monte Carlo analysis with automatic figure generation
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         n_repeats=100,
-        tests=['ks', 'chi2', 'rmse'],  # Always include RMSE!
+        tests=['ks', 'chi2', 'rmse'],  # Compare tests with CDF distance
         fig_output_path='stability_analysis.png'
     )
     
@@ -164,12 +182,17 @@ Determine the minimum sample size needed for stable parameter estimation:
     # Check stability points
     stability = results.attrs['stability_points']
     
-    # RMSE is the most reliable stability indicator
+    # Inspect the RMSE result for the selected detector
     if 'rmse' in stability:
-        print(f"Recommended minimum size (RMSE): {stability['rmse']['size']}")
+        print(f"Detected RMSE stability point: {stability['rmse']['size']}")
 
 .. important::
-   **Always include 'rmse' in your tests** - RMSE provides the most reliable stability detection with smooth, monotonic convergence, unlike p-values which can be erratic.
+   Include ``'rmse'`` when CDF distance is relevant. Its curve may show a clear
+   bend or plateau, but monotonic convergence is not guaranteed. Interpret the
+   detected point within the tested grid and compare it with variability across
+   repeats and the other diagnostics.
+
+.. _qs-xarray:
 
 Working with xarray Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -178,21 +201,29 @@ The Monte Carlo analysis returns an xarray Dataset for easy data manipulation:
 
 .. code-block:: python
 
-    # Select data for specific sample size
-    size_200_results = results.sel(sizes=200)
+    # Inspect dimensions and available variables
+    print(results.sizes)
+    print(list(results.data_vars))
+
+    # Select the first size, the size nearest 200, or a range
+    first_size_results = results.isel(sizes=0)
+    size_200 = results.sel(sizes=200, method='nearest')
+    larger_sizes = results.sel(sizes=slice(200, None))
     
     # Calculate statistics across repeats
+    param_mean = results['param_0'].mean(dim='repeats')
     param_std = results['param_0'].std(dim='repeats')
     rmse_median = results['rmse'].median(dim='repeats')
     
     # Plot results directly
     import matplotlib.pyplot as plt
-    results['rmse'].plot(x='sizes')
+    results['rmse'].plot(x='sizes', hue='repeats', alpha=0.3)
     plt.title('RMSE Convergence')
     plt.show()
     
     # Convert to pandas for further analysis
     df = results.to_dataframe()
+    figure_path = results.attrs['figure_path']  # None when no figure was saved
 
 Advanced Examples
 -----------------
@@ -205,7 +236,7 @@ Control the binning strategy for chi-square tests:
 .. code-block:: python
 
     # Use Scott's rule for binning
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         n_repeats=200,
         tests=['chi2', 'rmse'],
         bins='scott',
@@ -223,21 +254,21 @@ Choose between random, bootstrap, or disjoint sampling:
 .. code-block:: python
 
     # Random sampling (default)
-    results_random = processor.monte_carlo_fit(
+    results_random = adjuster.monte_carlo_fit(
         sampling='random',
         n_repeats=100,
         tests=['ks', 'rmse']
     )
     
     # Bootstrap sampling (with replacement)
-    results_bootstrap = processor.monte_carlo_fit(
+    results_bootstrap = adjuster.monte_carlo_fit(
         sampling='bootstrap',
         n_repeats=100,
         tests=['ks', 'rmse']
     )
     
     # Disjoint sampling (no overlap)
-    results_disjoint = processor.monte_carlo_fit(
+    results_disjoint = adjuster.monte_carlo_fit(
         sampling='disjoint',
         n_repeats=20,  # Limited by data size
         tests=['ks', 'rmse']
@@ -253,7 +284,7 @@ Use known distribution parameters instead of fitting:
     # Use known Weibull parameters (shape=2, loc=0, scale=1)
     known_params = (2.0, 0.0, 1.0)
     
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         distribution_params=known_params,
         n_repeats=150,
         tests=['chi2', 'ks', 'rmse']
@@ -278,7 +309,7 @@ Extract block maxima from time series for GEV analysis:
     extremes = processor.get_extremes_analyzer()
     
     # Extract annual maxima
-    annual_max, times = extremes.extract_block_maxima(block_size='A')
+    annual_max, times = extremes.extract_block_maxima(block_size='YE')
     print(f"Extracted {len(annual_max)} annual maxima")
     
     # Create new analyzer with annual maxima
@@ -316,7 +347,7 @@ See :doc:`api/extremes` for window examples and return types.
     import pandas as pd
     
     # Create hourly time series
-    dates = pd.date_range('2010-01-01', '2023-12-31', freq='H')
+    dates = pd.date_range('2010-01-01', '2023-12-31', freq='h')
     wave_heights = np.random.weibull(2, len(dates)) * 3 + 0.5
     series = pd.Series(wave_heights, index=dates)
     
@@ -341,16 +372,8 @@ See :doc:`api/extremes` for window examples and return types.
     processor_pot = ma.read_data(excesses)
     processor_pot.fit_distribution('genpareto')
 
-.. code-block:: python
 
-    # Use known Weibull parameters (shape=2, loc=0, scale=1)
-    known_params = (2.0, 0.0, 1.0)
-    
-    results = processor.monte_carlo_fit(
-        distribution_params=known_params,
-        n_repeats=150,
-        tests=['chi2', 'ks', 'rmse']
-    )
+.. _qs-constraints:
 
 Custom Fitting Constraints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -360,14 +383,14 @@ Apply parameter constraints during fitting:
 .. code-block:: python
 
     # Fix location parameter for Weibull distribution
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         n_repeats=100,
         tests=['ks', 'rmse'],
         fit_kwargs={'floc': 0}  # Force location = 0
     )
     
     # Multiple constraints
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         n_repeats=100,
         tests=['ks', 'rmse'],
         fit_kwargs={'floc': 0, 'method': 'MLE'}
@@ -409,7 +432,7 @@ The `monte_carlo_fit` method returns an xarray Dataset with:
     rmse_data = results['rmse']
     
     # Select specific size
-    size_100_data = results.sel(sizes=100)
+    first_size_data = results.isel(sizes=0)
     
     # Calculate median across repeats
     param_medians = results['param_0'].median(dim='repeats')
@@ -419,30 +442,23 @@ The `monte_carlo_fit` method returns an xarray Dataset with:
     if 'param_0' in stability:
         print(f"Parameter 0 stabilizes at size: {stability['param_0']['size']}")
     
-    # RMSE stability (most reliable)
+    # RMSE stability result for the selected detector
     if 'rmse' in stability:
         print(f"RMSE stabilizes at size: {stability['rmse']['size']}")
 
 AutoFitter Results
 ~~~~~~~~~~~~~~~~~~
 
-AutoFitter returns a dictionary with comprehensive fit information:
+``fit_best_distribution()`` returns an immutable ``FitResult``:
 
 .. code-block:: python
 
-    best_result = {
-        'distribution': 'weibull_min',
-        'success': True,
-        'parameters': (2.1, 0.0, 5.3),
-        'rmse': 0.012345,
-        'aic': 1234.5,
-        'bic': 1245.6,
-        'ks_statistic': 0.023,
-        'ks_pvalue': 0.456,
-        'chi2_statistic': 12.3,
-        'chi2_pvalue': 0.234,
-        'adjuster': <MagicAdjuster instance>
-    }
+    best_fit = auto_fitter.fit_best_distribution()
+    print(best_fit.name, best_fit.params)
+    print(best_fit.goodness_of_fit('rmse'))
+
+``get_comparison_table()`` returns a mapping of distribution names to scalar
+metric dictionaries, including ``params`` and ``success``; it stores no adjusters.
 
 Generating Summary Figures
 ---------------------------
@@ -456,14 +472,14 @@ By default no figure is created (faster). Provide a `fig_output_path` to save a
 .. code-block:: python
 
     # Generate and save figure with series style panels
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         tests=['ks', 'chi2', 'rmse'],
         n_repeats=100,
         fig_output_path='stability_summary.png'
     )
 
     # Boxplot style
-    results = processor.monte_carlo_fit(
+    results = adjuster.monte_carlo_fit(
         tests=['ks', 'rmse'],
         n_repeats=100,
         plot_type='boxplots',
@@ -473,8 +489,9 @@ By default no figure is created (faster). Provide a `fig_output_path` to save a
     # Path stored in attributes
     print(results.attrs.get('figure_path'))  # saved file path
 
-The red dashed vertical line in each panel marks the first sample size where
-the corresponding parameter or test metric meets the stability criterion.
+The red dashed vertical line in each panel marks the recommended size shared
+across panels. Individual detection results are in ``stability_points``. If
+``primary_metric`` is ``max_size``, the line represents the fallback, not detected stability.
 
 Custom Visualizations
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -532,7 +549,7 @@ Create non-directional wind speed time series with storms and seasonal variation
         weibull_shape=2.5,
         seasonal_amplitude=0.3,
         n_storms_per_year=5,
-        storm_duration_days=(2, 5),
+        storm_duration_range=(2, 5),
         storm_intensity_range=(12, 20),
         random_seed=42,
         create_plots=True
@@ -559,10 +576,10 @@ Create wind data with directional characteristics:
     # Generate 10 years of hourly directional wind data
     wind_data, plots = generate_directional_wind_data(
         n_years=10,
-        freq='H',
+        freq='h',
         mean_wind=8.0,
         prevailing_direction=270,  # West
-        directional_concentration=1.5,
+        prevailing_concentration=1.5,
         directional_speed_factors={
             'W': 1.4,   # Higher speeds from West (fetch effect)
             'SW': 1.4,
@@ -656,7 +673,7 @@ Apply to each directional sector:
     from magica.utils import generate_directional_wind_data
     
     # Generate directional data
-    wind_data = generate_directional_wind_data(n_years=10, freq='H')
+    wind_data = generate_directional_wind_data(n_years=10, freq='h')
     
     # Analyze each sector
     sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -665,7 +682,7 @@ Apply to each directional sector:
     for sector in sectors:
         # Filter by sector
         sector_mask = wind_data['sector_name'] == sector
-        sector_series = wind_data.loc[sector_mask, 'wind_speed']
+        sector_series = wind_data.loc[sector_mask].set_index('datetime')['wind_speed']
         
         # Find optimal threshold
         processor = ma.read_data(sector_series)
@@ -753,29 +770,32 @@ Best Practices
 Distribution Selection
 ~~~~~~~~~~~~~~~~~~~~~~
 
-1. **Use RMSE as primary criterion** for real-world data
+1. **Use RMSE as MagicA's empirically recommended primary criterion**
 2. **Start with AutoFitter's default list** (16 stable distributions) for quick analysis
-3. **Test comprehensive set** (113+ distributions) when you need the absolute best fit
+3. **Expand the candidate set carefully** when the default list is insufficient
 4. **Create domain-specific lists** (e.g., wind, rainfall) for faster, targeted analysis
-5. **Avoid p-value-only selection** with large datasets (>10,000 samples)
+5. **Use p-values as diagnostics**, considering calibration and multiple comparisons
 
 Monte Carlo Analysis
 ~~~~~~~~~~~~~~~~~~~~~
 
-1. **Always include 'rmse' in tests** - most reliable stability indicator
-2. **Use 100+ repeats** for robust stability detection
+1. **Use RMSE as the primary stability signal**, following MagicA's empirical recommendation
+2. **Increase repeats until the interpretation is insensitive to that choice**
 3. **Choose appropriate sampling**:
    - `'random'` - General purpose, allows overlap
    - `'bootstrap'` - With replacement, good for uncertainty
    - `'disjoint'` - No overlap, limited by data size
 4. **Generate summary figures** with `fig_output_path` for visual inspection
-5. **Check RMSE stability first**, then validate with other metrics
+5. **Compare detector results and inspect the curves visually**
 
 Large Sample Size Effect
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. warning::
-   With large datasets (>10,000 observations), goodness-of-fit tests (KS, Chi-square) tend to reject even excellent fits. **Use RMSE for large datasets.**
+   As sample size grows, goodness-of-fit tests can detect smaller departures
+   from a candidate distribution. There is no universal sample-size cutoff.
+   Interpret statistical significance together with discrepancy magnitude,
+   location, and practical importance.
 
 See the :doc:`tutorials/magic_adjuster_tutorial` section on "Large Sample Size Effect" for detailed explanation and examples.
 

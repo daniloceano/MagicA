@@ -12,19 +12,22 @@ MagicA requires Python 3.8 or higher and depends on:
 * **SciPy** (>=1.7.0) - Scientific computing and statistical distributions
 * **Pandas** (>=1.3.0) - Data structures and analysis
 * **Matplotlib** (>=3.4.0) - Plotting and visualization
-* **xarray** (>=0.19.0) - Labeled multi-dimensional arrays
-* **tqdm** (>=4.62.0) - Progress bars
+* **xarray** (>=0.16.0) - Labeled multi-dimensional arrays
+* **Seaborn** (>=0.11.0) - Visualization
+* **scikit-learn** (>=1.0.0) - Statistical tools
 
 Install via pip
 ---------------
 
-The easiest way to install MagicA is using pip:
+Install this MagicA project directly from its repository:
 
 .. code-block:: bash
 
-    pip install magica
+    pip install "git+https://github.com/daniloceano/MagicA.git"
 
-This will automatically install all required dependencies.
+This installs the dependencies declared by this repository. The PyPI project
+named ``magica`` currently belongs to a different project; do not use the bare
+``pip install magica`` command for this repository.
 
 Install from Source
 -------------------
@@ -57,7 +60,7 @@ For contributing to MagicA, install with development dependencies:
 This includes additional packages for:
 
 * **pytest** - Testing framework
-* **sphinx** - Documentation generation
+* **jupyter** - Notebook examples
 * **black** - Code formatting
 * **flake8** - Code linting
 
@@ -76,10 +79,10 @@ To verify that MagicA is correctly installed:
     
     # Create processor and fit distribution
     processor = ma.read_data(data)
-    processor.fit_distribution('weibull_min')
+    fit = processor.fit('weibull_min')
     
     # Get fitted parameters
-    params = processor.get_fitted_params()
+    params = fit.params
     print(f"✓ MagicA installed successfully!")
     print(f"Fitted parameters: {params}")
 
@@ -92,11 +95,14 @@ For Jupyter notebook support:
 
     pip install jupyter notebook
 
-For enhanced visualization:
+For documentation builds, also install the documentation requirements:
 
 .. code-block:: bash
 
-    pip install seaborn
+    pip install -r docs/requirements.txt
+
+``tqdm`` is optional for progress bars and is included in the development extras.
+Seaborn is already a required dependency.
 
 Upgrading
 ---------
@@ -105,7 +111,7 @@ To upgrade to the latest version:
 
 .. code-block:: bash
 
-    pip install --upgrade magica
+    pip install --upgrade "git+https://github.com/daniloceano/MagicA.git"
 
 Uninstalling
 ------------
@@ -136,7 +142,7 @@ Ensure you have a compatible SciPy version:
 
 .. code-block:: bash
 
-    pip install --upgrade scipy>=1.7.0
+    pip install --upgrade "scipy>=1.7.0"
 
 **xarray import errors**
 
@@ -144,7 +150,7 @@ Install or upgrade xarray:
 
 .. code-block:: bash
 
-    pip install --upgrade xarray>=0.19.0
+    pip install --upgrade "xarray>=0.16.0"
 
 Getting Help
 ~~~~~~~~~~~~

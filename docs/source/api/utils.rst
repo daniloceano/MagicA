@@ -17,9 +17,8 @@ Module Reference
 ----------------
 
 .. automodule:: magica.utils.synthetic_data
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-members:
+   :no-special-members:
 
 Quick Start
 -----------
@@ -42,7 +41,7 @@ Create synthetic wind speed time series with storms and seasonal variations:
         weibull_shape=2.5,
         seasonal_amplitude=0.3,
         n_storms_per_year=5,
-        storm_duration_days=(2, 5),
+        storm_duration_range=(2, 5),
         storm_intensity_range=(12, 20),
         random_seed=42,
         create_plots=True
@@ -82,15 +81,15 @@ Create synthetic wind data with directional characteristics:
     # Generate 10 years of hourly directional wind data
     wind_data, plots = generate_directional_wind_data(
         n_years=10,
-        freq='H',
+        freq='h',
         mean_wind=8.0,
         weibull_shape=2.0,
         seasonal_amplitude=0.25,
         n_storms_per_year=5,
-        storm_duration_hours=(8, 16),
+        storm_duration_range=(8, 16),
         storm_intensity_range=(15, 25),
         prevailing_direction=270,  # West
-        directional_concentration=1.5,
+        prevailing_concentration=1.5,
         directional_speed_factors={
             'W': 1.4,   # Higher speeds from West (fetch effect)
             'SW': 1.4,  # Higher speeds from Southwest
@@ -129,7 +128,7 @@ Both generators support extensive customization:
 
     wind_series = generate_wind_data(
         n_storms_per_year=8,              # More frequent storms
-        storm_duration_days=(1, 3),       # Shorter storms
+        storm_duration_range=(1, 3),       # Shorter storms
         storm_intensity_range=(10, 15),   # Less intense
         storm_decay_shape='gaussian'      # Gaussian vs triangular
     )
@@ -140,7 +139,7 @@ Both generators support extensive customization:
 
     wind_data = generate_directional_wind_data(
         prevailing_direction=180,         # South
-        directional_concentration=2.0,    # Stronger directional bias
+        prevailing_concentration=2.0,    # Stronger directional bias
         secondary_direction=90,           # East
         secondary_concentration=1.0,
         secondary_fraction=0.3,          # 30% from secondary direction
@@ -248,7 +247,7 @@ Generate data for directional wind studies:
     # Generate directional data
     wind_data = generate_directional_wind_data(
         n_years=10,
-        freq='H',
+        freq='h',
         prevailing_direction=270,  # West
         n_storms_per_year=5
     )
