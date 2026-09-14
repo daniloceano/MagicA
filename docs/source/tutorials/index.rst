@@ -24,7 +24,7 @@ This tutorial covers:
 - **RMSE as the most reliable stability indicator**
 - Comparing different sampling strategies (random, bootstrap, disjoint)
 - CPS (Coefficient/P-value/Sample size) method from Lin et al. (2011)
-- Real-world example with INMET weather station data
+- Synthetic wind-data examples
 
 .. important::
    This tutorial demonstrates why **RMSE is the preferred metric** for assessing fit quality and stability, especially with large datasets where p-values can be misleading.
@@ -97,6 +97,7 @@ This tutorial covers:
    :maxdepth: 1
 
    extremes_tutorial
+   directional_extremes_tutorial
 
 **Key Learning Outcomes:**
 
@@ -162,8 +163,8 @@ Weibull Fit Example
 ~~~~~~~~~~~~~~~~~~~
 
 .. note::
-   The Jupyter notebook `MagicA_Weibull_Fit_Example.ipynb` can be found in this directory.
-   You can download and run it locally to follow along with the examples.
+   The historical notebook ``MagicA_Weibull_Fit_Example.ipynb`` is not included
+   in the current repository. Use :doc:`magic_adjuster_tutorial` instead.
    
    **Note:** This is a legacy example. We recommend using the updated MagicAdjuster tutorial instead.
 
@@ -171,8 +172,8 @@ Magic Adjuster Example
 ~~~~~~~~~~~~~~~~~~~~~~
 
 .. note::
-   The Python script `example_magic_adjuster.py` contains example usage of the MagicAdjuster class.
-   You can find it in this directory and run it as a standalone script.
+   The historical script ``example_magic_adjuster.py`` is not included in the
+   current repository. Use :doc:`magic_adjuster_tutorial` instead.
    
    **Note:** This is a legacy example. We recommend using the updated tutorials instead.
 
@@ -183,14 +184,14 @@ Download the following files to run locally:
 
 **Main Tutorials:**
 
+* :download:`directional_extremes_tutorial.ipynb <directional_extremes_tutorial.ipynb>` - Directional extreme value analysis
+
 * :download:`magic_adjuster_tutorial.ipynb <magic_adjuster_tutorial.ipynb>` - Complete MagicAdjuster tutorial with Monte Carlo CPS methods
 * :download:`auto_fitter_tutorial.ipynb <auto_fitter_tutorial.ipynb>` - Comprehensive AutoFitter tutorial with RMSE emphasis
 * :download:`extremes_tutorial.ipynb <extremes_tutorial.ipynb>` - Extreme value analysis with GEV and GPD distributions
 
 **Legacy Materials:**
 
-* :download:`MagicA_Weibull_Fit_Example.ipynb <MagicA_Weibull_Fit_Example.ipynb>` - Legacy Weibull fitting examples
-* :download:`example_magic_adjuster.py <example_magic_adjuster.py>` - Python script with MagicAdjuster examples
 * :download:`api_usage.md <api_usage.md>` - API usage guide in Markdown format
 
 Best Practices Summary

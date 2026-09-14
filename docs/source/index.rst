@@ -16,7 +16,7 @@ Overview
 MagicA provides tools for:
 
 * Statistical distribution fitting (Weibull, Normal, Lognormal, etc.)
-* Goodness-of-fit tests (Kolmogorov-Smirnov, Anderson-Darling, etc.)  
+* Goodness-of-fit tests (Kolmogorov-Smirnov, Chi-square, etc.)
 * Automatic best distribution selection
 * Integrated visualization functions
 * Specialized wind data analysis
@@ -42,7 +42,7 @@ Quick Start
 
    # Load data
    processor = ma.DataProcessor()
-   processor.load_data('wind_data.csv')
+   processor.load_data([2.1, 5.4, 8.7, 12.3])
 
    # Get basic statistics
    stats = processor.get_basic_stats()
