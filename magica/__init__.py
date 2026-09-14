@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from typing import Union
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "Danilo Couto de Souza"
 __email__ = "danilo.oceano@gmail.com"
 

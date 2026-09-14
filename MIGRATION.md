@@ -1,6 +1,6 @@
 # MagicA Migration Guide: 0.1.x → 0.2.0
 
-## Unreleased: POT time-window selection
+## 0.3.0: POT time-window selection
 
 Time-based POT now chooses the largest observation in each window by default.
 For the previous behavior on chronological input, request `peak_selection='first'`:

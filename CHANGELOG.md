@@ -4,7 +4,7 @@ All notable changes to MagicA are documented here.
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-09-14
 
 ### Changed
 
@@ -14,12 +14,21 @@ All notable changes to MagicA are documented here.
   Windows start at the first ungrouped exceedance and exclude the right endpoint;
   selected peaks in adjacent windows may be closer than the window duration.
   Extracted values and downstream fits/return levels can change with the new default.
+- Documentation now has clearer entry points for installation, quick start,
+  distribution fitting, extreme-value analysis, and Monte Carlo stability.
+- The changelog page displays the complete project history directly from this file.
+- Monte Carlo guidance recommends RMSE as the primary stability signal based on
+  MagicA's empirical results, with p-values and finite AIC/BIC values presented
+  as complementary diagnostics.
 
 ### Fixed
 
 - POT extraction with time-based declustering now returns empty values and
   timestamps instead of raising `IndexError` when no observations exceed the
   threshold.
+- Monte Carlo examples and API documentation now use the current fitting flow,
+  distinguish detector fallback from detected stability, and preserve tutorial
+  figures and displayed results.
 
 ## [0.2.0] — 2026-06-11
 
