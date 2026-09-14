@@ -22,34 +22,17 @@ MagicA provides tools for:
 * Specialized wind data analysis
 * Advanced statistical fitting techniques
 
-Installation
-------------
+Getting Started
+---------------
 
-For development installation:
+.. _installation:
 
-.. code-block:: bash
+Start with :doc:`installation` to set up MagicA.
 
-   git clone https://github.com/daniloceano/MagicA.git
-   cd MagicA
-   pip install -e .
+.. _quick-start:
 
-Quick Start
------------
-
-.. code-block:: python
-
-   import magica as ma
-
-   # Load data
-   processor = ma.DataProcessor()
-   processor.load_data([2.1, 5.4, 8.7, 12.3])
-
-   # Get basic statistics
-   stats = processor.get_basic_stats()
-   print(stats)
-
-   # Get data as numpy array
-   data_array = processor.get_data_array()
+Follow :doc:`quickstart` for your first fit, or explore :doc:`tutorials/index`
+for guided examples with figures.
 
 Contents
 --------
